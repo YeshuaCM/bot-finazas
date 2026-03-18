@@ -4,7 +4,7 @@
   "description": "Bot de Telegram para gestión financiera personal con NLP",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "rm -rf dist && tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "test": "jest"
