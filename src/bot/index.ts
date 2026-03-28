@@ -20,12 +20,32 @@ bot.catch((err) => {
 
 // Comando /start
 bot.command('start', async (ctx: any) => {
-  await ctx.reply('¡Bienvenido a tu Asistente Financiero! 🎉\n\n'
-    + 'Puedo ayudarte a:\n'
-    + '• Registrar gastos e ingresos\n'
-    + '• Consultar tu balance\n'
-    + '• Ver reportes mensuales\n\n'
-    + 'Escribe un mensaje como "Gasté 25000 en comida" o usa los comandos.');
+  const user = ctx.config?.user;
+  
+  if (user) {
+    // Usuario ya registrado - mensaje de bienvenida de vuelta
+    await ctx.reply(
+      '¡Bienvenido de vuelta! 👋\n\n'
+      + 'Tu asistente financiero está listo para ayudarte.\n\n'
+      + '¿Qué quieres hacer hoy?\n'
+      + '• Registrar un gasto o ingreso\n'
+      + '• Consultar tu /balance\n'
+      + '• Ver tu /reporte mensual\n\n'
+      + 'También puedes escribir directamente:\n'
+      + '• "Gasté 25000 en comida"\n'
+      + '• "Me pagaron 500000"'
+    );
+  } else {
+    // Nuevo usuario - mensaje de bienvenida
+    await ctx.reply(
+      '¡Bienvenido a tu Asistente Financiero! 🎉\n\n'
+      + 'Puedo ayudarte a:\n'
+      + '• registrar gastos e ingresos\n'
+      + '• Consultar tu balance\n'
+      + '• Ver reportes mensuales\n\n'
+      + 'Escribe un mensaje como "Gasté 25000 en comida" o usa los comandos.'
+    );
+  }
 });
 
 // Iniciar bot
