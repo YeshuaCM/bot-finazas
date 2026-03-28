@@ -60,7 +60,7 @@ export function registerConversations(bot: Bot) {
       const categoryMap: Record<string, string> = {
         'cat_comida': 'comida', 'cat_transporte': 'transporte', 'cat_mercado': 'mercado',
         'cat_servicios': 'servicios', 'cat_salud': 'salud', 'cat_entretenimiento': 'entretenimiento',
-        'cat_educacion': 'educación', 'cat_otros': 'otros',
+        'cat_educacion': 'educación', 'cat_diezmos': 'diezmos', 'cat_ofrendas': 'ofrendas', 'cat_otros': 'otros',
         'cat_salario': 'salario', 'cat_freelance': 'freelance', 'cat_inversion': 'inversión',
         'cat_regalo': 'regalo', 'cat_otro': 'otro',
       };
@@ -213,6 +213,8 @@ export function registerConversations(bot: Bot) {
       case 'cat_salud':
       case 'cat_entretenimiento':
       case 'cat_educacion':
+      case 'cat_diezmos':
+      case 'cat_ofrendas':
       case 'cat_otros':
       // Categorías de INGRESOS
       case 'cat_salario':
@@ -234,6 +236,8 @@ export function registerConversations(bot: Bot) {
           'cat_salud': 'salud',
           'cat_entretenimiento': 'entretenimiento',
           'cat_educacion': 'educación',
+          'cat_diezmos': 'diezmos',
+          'cat_ofrendas': 'ofrendas',
           'cat_otros': 'otros',
           'cat_salario': 'salario',
           'cat_freelance': 'freelance',

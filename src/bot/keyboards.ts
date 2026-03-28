@@ -1,4 +1,5 @@
 import { InlineKeyboard } from 'grammy';
+import { getCategoriesForType } from '../data/categories';
 
 export function mainMenuKeyboard() {
   return new InlineKeyboard()
@@ -12,32 +13,21 @@ export function mainMenuKeyboard() {
 }
 
 export function categoryKeyboard(type: 'gasto' | 'ingreso') {
-  const categories = type === 'gasto' 
-    ? [
-        ['🍔 Comida', 'cat_comida'],
-        ['🚗 Transporte', 'cat_transporte'],
-        ['🛒 Mercado', 'cat_mercado'],
-        ['💡 Servicios', 'cat_servicios'],
-        ['💊 Salud', 'cat_salud'],
-        ['🎬 Entretenimiento', 'cat_entretenimiento'],
-        ['📚 Educación', 'cat_educacion'],
-        ['📦 Otros', 'cat_otros'],
-      ]
-    : [
-        ['💰 Salario', 'cat_salario'],
-        ['💻 Freelance', 'cat_freelance'],
-        ['📈 Inversión', 'cat_inversion'],
-        ['🎁 Regalo', 'cat_regalo'],
-        ['💵 Otro', 'cat_otro'],
-      ];
+  const categories = getCategoriesForType(type);
   
   const keyboard = new InlineKeyboard();
   
-  categories.forEach(([label, callback]) => {
+  categories.forEach(({ name, emoji }) => {
+    const callback = `cat_${name}`;
+    const label = `${emoji} ${capitalize(name)}`;
     keyboard.text(label, callback).row();
   });
   
   return keyboard;
+}
+
+function capitalize(str: string): string {
+  return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
 export function confirmKeyboard() {

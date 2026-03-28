@@ -11,6 +11,7 @@ const envSchema = z.object({
   GEMINI_API_KEY: z.string().min(1, "GEMINI_API_KEY es requerido"),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   PORT: z.coerce.number().default(3000),
+  ALLOWED_USERS: z.string().optional(),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);
@@ -20,6 +21,10 @@ if (!parsedEnv.success) {
   console.error(parsedEnv.error.flatten().fieldErrors);
   throw new Error("Faltan o son inválidas las variables de entorno requeridas");
 }
+
+const allowedUsers = parsedEnv.data.ALLOWED_USERS
+  ? parsedEnv.data.ALLOWED_USERS.split(',').map(id => parseInt(id.trim(), 10))
+  : null;
 
 export const config = {
   telegram: {
@@ -37,6 +42,7 @@ export const config = {
     env: parsedEnv.data.NODE_ENV,
     port: parsedEnv.data.PORT,
   },
+  allowedUsers,
 } as const;
 
 export type Config = typeof config;

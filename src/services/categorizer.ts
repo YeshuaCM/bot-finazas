@@ -1,24 +1,6 @@
 import { categoryRepository } from '../data/repositories/category.repository';
 import type { Category } from '../types';
-
-const DEFAULT_CATEGORIES: Record<string, string[]> = {
-  comida: ['almuerzo', 'cena', 'desayuno', 'comida', 'restaurante', 'pizza', 'hamburguesa', 'sándwich', 'café'],
-  transporte: ['taxi', 'uber', 'lyft', 'transporte', 'combustible', 'nafta', 'gasolina', 'camión', 'metro', 'bus', 'avión'],
-  servicios: ['internet', 'luz', 'agua', 'teléfono', 'celular', 'netflix', 'spotify', 'netflix', 'amazon', 'servicio'],
-  mercado: ['mercado', 'supermercado', 'tienda', 'bodega', 'compras', 'mercadería'],
-  salud: ['doctor', 'médico', 'medicamento', 'hospital', 'clínica', 'salud', 'farmacia', 'psicólogo'],
-  entretenimiento: ['cine', 'juego', 'fiesta', 'concierto', 'evento', 'bar', 'pub'],
-  educación: ['curso', 'libro', 'escuela', 'universidad', 'educación', 'estudio', 'carrera'],
-  otros: ['otro', 'otros', 'varios', 'misc'],
-};
-
-const INCOME_CATEGORIES: Record<string, string[]> = {
-  salary: ['salario', 'sueldo', 'pago', 'nómina', 'payroll'],
-  freelance: ['freelance', 'proyecto', 'cliente', 'contrato'],
-  inversión: ['inversión', 'rendimiento', 'dividendo', 'interés', 'ganancia'],
-  regalo: ['regalo', 'premio', 'bono'],
-  otro: ['otro', 'ingreso', 'extra'],
-};
+import { CATEGORIES_KEYWORDS, getCategoryEmoji, getCategoriesForType, EXPENSE_CATEGORIES, INCOME_CATEGORIES } from '../data/categories';
 
 export async function categorize(
   userId: number,
@@ -31,10 +13,14 @@ export async function categorize(
   const userCategories = await categoryRepository.findByUserId(userId, type);
   
   // Buscar coincidencia por palabras clave
-  const categoryMap = type === 'gasto' ? DEFAULT_CATEGORIES : INCOME_CATEGORIES;
+  const categoryMap = type === 'gasto' ? CATEGORIES_KEYWORDS : CATEGORIES_KEYWORDS;
   
   for (const [categoryName, keywords] of Object.entries(categoryMap)) {
-    if (keywords.some(k => lowerText.includes(k))) {
+    // Solo buscar en categorías válidas para este tipo
+    const validCats = type === 'gasto' ? EXPENSE_CATEGORIES : INCOME_CATEGORIES;
+    if (!validCats.includes(categoryName)) continue;
+    
+    if (keywords.some((k: string) => lowerText.includes(k))) {
       // Buscar categoría en DB
       const dbCategory = userCategories.find(c => 
         c.name.toLowerCase() === categoryName.toLowerCase()
@@ -52,32 +38,11 @@ export async function categorize(
     id: '',
     name: type === 'gasto' ? 'otros' : 'otro',
     type,
-    emoji: type === 'gasto' ? '📦' : '💵',
+    emoji: getCategoryEmoji(type === 'gasto' ? 'otros' : 'otro'),
     is_default: true,
   };
 }
 
 export function getDefaultCategories(type: 'gasto' | 'ingreso'): Array<{ name: string; emoji: string }> {
-  const categories = type === 'gasto' 
-    ? DEFAULT_CATEGORIES 
-    : INCOME_CATEGORIES;
-  
-  return Object.entries(categories).map(([name, _]) => ({
-    name,
-    emoji: type === 'gasto' ? getEmoji(name) : '💰',
-  }));
-}
-
-function getEmoji(category: string): string {
-  const emojis: Record<string, string> = {
-    comida: '🍔',
-    transporte: '🚗',
-    servicios: '💡',
-    mercado: '🛒',
-    salud: '💊',
-    entretenimiento: '🎬',
-    educación: '📚',
-    otros: '📦',
-  };
-  return emojis[category] || '📦';
+  return getCategoriesForType(type);
 }

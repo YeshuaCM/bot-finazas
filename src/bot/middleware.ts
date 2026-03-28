@@ -1,5 +1,6 @@
 import { Context, NextFunction } from 'grammy';
 import { userRepository } from '../data/repositories/user.repository';
+import { config } from '../config';
 
 export async function authMiddleware(ctx: Context, next: NextFunction) {
   if (!ctx.from) {
@@ -8,6 +9,17 @@ export async function authMiddleware(ctx: Context, next: NextFunction) {
   
   const telegramId = ctx.from.id;
   const { username, first_name, last_name } = ctx.from;
+  
+  // Verificar si el acceso está restringido
+  if (config.allowedUsers && !config.allowedUsers.includes(telegramId)) {
+    await ctx.reply(
+      '⛔ *Acceso Denegado*\n\n'
+      + 'Este bot es de uso privado.\n'
+      + 'Si crees que esto es un error, contacta al administrador.',
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
   
   try {
     // Primero buscar si el usuario ya existe

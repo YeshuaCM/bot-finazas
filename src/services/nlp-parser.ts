@@ -1,62 +1,13 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { config } from "../config";
 import type { ParsedTransaction } from "../types";
-
-// =============================================================================
-// CONSTANTES - Keywords para categorización
-// =============================================================================
-
-const CATEGORIES = {
-  // Categorías de GASTO
-  comida: [
-    "comida", "almuerzo", "cena", "desayuno", "restaurante", "pizza", 
-    "hamburguesa", "queso", "pan", "leche", "carne", "pollo", "pescado",
-    "empanada", "sándwich", "torta", "fruta", "verdura", "huevo", "café"
-  ],
-  transporte: [
-    "taxi", "uber", "lyft", "transporte", "combustible", "nafta", "gasolina",
-    "bencina", "camión", "metro", "bus", "colectivo", "pasaje", "tiquete"
-  ],
-  servicios: [
-    "internet", "luz", "agua", "teléfono", "celular", "netflix", "spotify",
-    "amazon", "servicio", "mantenimiento", "arriendo"
-  ],
-  mercado: [
-    "mercado", "supermercado", "tienda", "bodega", "jumbo", "lider", "exito"
-  ],
-  salud: [
-    "doctor", "médico", "medicamento", "hospital", "farmacia", "consulta", "clínica"
-  ],
-  entretenimiento: [
-    "cine", "juego", "fiesta", "concierto", "bar", "gimnasio", "netflix", "spotify"
-  ],
-  educación: [
-    "curso", "libro", "escuela", "universidad", "estudio", "carrera"
-  ],
-  // Categorías de INGRESO
-  salario: [
-    "salario", "sueldo", "pago", "nómina", "prima", "bonificación", "pagado"
-  ],
-  freelance: [
-    "freelance", "freelance", "proyecto", "cliente", "consultoría"
-  ],
-  inversión: [
-    "inversión", "rendimiento", "dividendo", "ganancia", "interés"
-  ],
-  regalo: ["regalo", "premio", "sorteo"],
-};
+import { CATEGORIES_KEYWORDS, VALID_CATEGORIES, detectCategoryByKeyword } from "../data/categories";
 
 // Keywords que indican que es un INGRESO
 const INCOME_KEYWORDS = [
   "recibí", "recibido", "recibio", "me pagaron", "pagaron", "pago", 
   "transferencia", "depósito", "deposito", "ingreso", "gané", "gane"
 ];
-
-// Categorías válidas por tipo de transacción
-const VALID_CATEGORIES = {
-  gasto: ["comida", "transporte", "servicios", "mercado", "salud", "entretenimiento", "educación", "otros"],
-  ingreso: ["salario", "freelance", "inversión", "regalo", "otro"]
-};
 
 // =============================================================================
 // PROMPT PARA GEMINI
@@ -107,30 +58,6 @@ function isIncomeMessage(message: string): boolean {
 }
 
 /**
- * Detecta la categoría basándose en keywords
- */
-function detectCategory(message: string, tipo: 'gasto' | 'ingreso'): string {
-  const lower = message.toLowerCase();
-  const validCats = VALID_CATEGORIES[tipo];
-  let bestMatch = 'otros';
-  let maxLength = 0;
-
-  for (const [category, keywords] of Object.entries(CATEGORIES)) {
-    // Solo buscar en categorías válidas para este tipo
-    if (!validCats.includes(category)) continue;
-    
-    for (const keyword of keywords) {
-      if (lower.includes(keyword) && keyword.length >= maxLength) {
-        bestMatch = category;
-        maxLength = keyword.length;
-      }
-    }
-  }
-
-  return bestMatch;
-}
-
-/**
  * Extrae el monto del mensaje
  */
 function extractAmount(message: string): number {
@@ -158,7 +85,7 @@ function extractAmount(message: string): number {
 function parseLocally(message: string): ParsedTransaction {
   const tipo = isIncomeMessage(message) ? 'ingreso' : 'gasto';
   const monto = extractAmount(message);
-  const categoria = detectCategory(message, tipo);
+  const categoria = detectCategoryByKeyword(message, tipo);
   
   return {
     tipo,
@@ -202,7 +129,7 @@ export async function parseTransactionMessage(
     const validCats = VALID_CATEGORIES[tipoKey] || VALID_CATEGORIES.gasto;
     if (!categoria || !validCats.includes(categoria)) {
       console.log('Categoría inválida, usando categorizador local');
-      categoria = detectCategory(message, parsed.tipo);
+      categoria = detectCategoryByKeyword(message, parsed.tipo as 'gasto' | 'ingreso');
     }
     
     return {
