@@ -1,10 +1,9 @@
 import { Router, Request, Response } from "express";
-import { Bot, webhookCallback } from "grammy";
+import { webhookCallback } from "grammy";
 import { config } from "../../config";
+import { bot } from "../../bot";
 
 const router = Router();
-
-const bot = new Bot(config.telegram.botToken);
 
 // Webhook de Telegram
 router.post("/telegram", async (req: Request, res: Response) => {
