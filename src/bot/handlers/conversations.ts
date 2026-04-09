@@ -1,5 +1,6 @@
 import { Bot } from 'grammy';
-import { parseTransactionMessage, parseAmount } from '../../services/nlp-parser';
+import { runAgent, confirmarTransaccion } from '../../services/ai-agent';
+import { parseAmount } from '../../services/nlp-parser';
 import { transactionRepository } from '../../data/repositories/transaction.repository';
 import { categoryRepository } from '../../data/repositories/category.repository';
 import { confirmKeyboard, categoryKeyboard } from '../keyboards';
@@ -80,39 +81,47 @@ export function registerConversations(bot: Bot) {
       return;
     }
     
-    // Estado idle: intentar parsear con NLP
+    // Estado idle: usar AI Agent
     try {
-      const parsed = await parseTransactionMessage(messageText);
+      const telegramUserId = ctx.from?.id;
+      const user = ctx.config?.user;
       
-      if (parsed.monto <= 0) {
-        await ctx.reply('No entendí el monto. ¿Podés ser más específico?\n\n'
-          + 'Ejemplo: "Gasté 25000 en comida"');
+      if (!user) {
+        await ctx.reply('Error: usuario no identificado');
         return;
       }
       
-      // Guardar en sesión
-      session.type = parsed.tipo;
-      session.amount = parsed.monto;
-      session.category = parsed.categoria;
-      session.description = parsed.descripcion;
-      session.rawMessage = messageText;
-      session.state = 'confirming';
+      // Check if user said "sí" or "confirmar" to confirm pending transaction
+      const confirmationWords = ['sí', 'si', 'confirmar', 'si claro', 'dale', 'ok', 'sí confirmo'];
+      if (session.state === 'confirming' && confirmationWords.some(w => messageText.toLowerCase().includes(w))) {
+        if (session.type && session.amount) {
+          const result = await confirmarTransaccion(
+            user.telegram_id,
+            session.type,
+            session.amount,
+            session.description
+          );
+          await ctx.reply(result.message);
+          sessions.delete(telegramId);
+          return;
+        }
+      }
       
-      const emoji = parsed.tipo === 'gasto' ? '💸' : '💵';
-      await ctx.reply(
-        `${emoji} *Transacción detectada:*\n\n`
-        + `Tipo: ${parsed.tipo}\n`
-        + `Monto: $${parsed.monto.toLocaleString('es-CL')}\n`
-        + `Categoría: ${parsed.categoria || 'sin categoría'}\n`
-        + `Descripción: ${parsed.descripcion || 'sin descripción'}\n\n`
-        + `¿Confirmar?`,
-        { parse_mode: 'Markdown', reply_markup: confirmKeyboard() }
-      );
+      // Usar AI Agent
+      const response = await runAgent(messageText, user.telegram_id);
+      
+      // Si requiere confirmación, guardar en sesión para el callback
+      if (response.requiresConfirmation && response.data) {
+        session.type = response.data.tipo;
+        session.amount = response.data.monto;
+        session.description = response.data.descripcion;
+        session.state = 'confirming';
+      }
+      
+      await ctx.reply(response.message, { parse_mode: 'Markdown' });
     } catch (error) {
-      console.error('NLP parse error:', error);
-      await ctx.reply('No entendí el mensaje. Intenta usar el formato:\n'
-        + '• "Gasté 25000 en comida"\n'
-        + '• "Me pagaron 500000"');
+      console.error('AI Agent error:', error);
+      await ctx.reply('Tuve un problema al procesar. Probá de nuevo.');
     }
   });
   
