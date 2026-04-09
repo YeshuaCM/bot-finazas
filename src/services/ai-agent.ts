@@ -11,8 +11,11 @@ type Intent =
   | "registrar_gasto"
   | "registrar_ingreso"
   | "consultar_gastos_hoy"
+  | "consultar_gastos_ayer"
   | "consultar_gastos_semana"
+  | "consultar_gastos_mes"
   | "consultar_balance"
+  | "consultar_balance_mes"
   | "consultar_por_categoria"
   | "saludar"
   | "ayuda"
@@ -27,10 +30,13 @@ const INTENT_SYSTEM_PROMPT = `Eres un clasificador de intents para un bot financ
 Tu lavoro es ANALIZAR el mensaje del usuario y devolver SOLO un intent de los siguientes:
 
 - "registrar_gasto": Cuando el usuario quiere registrar un gasto (compró, gasté, pagué, etc.)
-- "registrar_ingreso": Cuando el usuario quiere registrar un ingreso (recibí, me pagaron, gané, etc.)
+- "registrar_ingreso": Cuando el usuario quiere registrar un ingreso (recibi, me pagaron, gané, etc.)
 - "consultar_gastos_hoy": Pregunta sobre gastos de HOY (cuánto gasté hoy, qué compré hoy)
+- "consultar_gastos_ayer": Pregunta sobre gastos de AYER (cuánto gasté ayer, qué compré ayer)
 - "consultar_gastos_semana": Pregunta sobre gastos de la semana
-- "consultar_balance": Pregunta sobre cuánto tiene (balance, cuánto me queda, total)
+- "consultar_gastos_mes": Pregunta sobre gastos del MES (este mes, mes pasado)
+- "consultar_balance": Pregunta sobre balance TOTAL (cuánto tengo, balance)
+- "consultar_balance_mes": Pregunta sobre balance del MES (este mes, mes pasado)
 - "consultar_por_categoria": Pregunta breakdown por categoría
 - "saludar": Saludos (hola, buenas, hello, qué tal)
 - "ayuda": Pide ayuda o comandos
@@ -120,8 +126,11 @@ async function detectIntent(message: string): Promise<Intent> {
     "registrar_gasto": "registrar_gasto",
     "registrar_ingreso": "registrar_ingreso",
     "consultar_gastos_hoy": "consultar_gastos_hoy",
+    "consultar_gastos_ayer": "consultar_gastos_ayer",
     "consultar_gastos_semana": "consultar_gastos_semana",
+    "consultar_gastos_mes": "consultar_gastos_mes",
     "consultar_balance": "consultar_balance",
+    "consultar_balance_mes": "consultar_balance_mes",
     "consultar_por_categoria": "consultar_por_categoria",
     "saludar": "saludar",
     "ayuda": "ayuda",
@@ -177,6 +186,40 @@ export async function runAgent(userMessage: string, userId: number): Promise<Age
         };
       }
       
+      case "consultar_gastos_ayer": {
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yesterdayStr = yesterday.toISOString().split("T")[0];
+        
+        const gastos = await transactionRepository.findByUserId(userId, {
+          type: "gasto",
+          dateFrom: yesterdayStr,
+          dateTo: yesterdayStr,
+        });
+        
+        return { 
+          message: formatGastos(gastos), 
+          intent 
+        };
+      }
+      
+      case "consultar_gastos_mes": {
+        const today = new Date();
+        const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1)
+          .toISOString().split("T")[0];
+        
+        const gastos = await transactionRepository.findByUserId(userId, {
+          type: "gasto",
+          dateFrom: firstDayOfMonth,
+          dateTo: today.toISOString().split("T")[0],
+        });
+        
+        return { 
+          message: formatGastos(gastos), 
+          intent 
+        };
+      }
+      
       case "consultar_gastos_semana": {
         const today = new Date();
         const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -199,6 +242,33 @@ export async function runAgent(userMessage: string, userId: number): Promise<Age
         const [gastos, ingresos] = await Promise.all([
           transactionRepository.findByUserId(userId, { type: "gasto", dateTo: today }),
           transactionRepository.findByUserId(userId, { type: "ingreso", dateTo: today }),
+        ]);
+        
+        const totalGastos = gastos.reduce((sum, t) => sum + t.amount, 0);
+        const totalIngresos = ingresos.reduce((sum, t) => sum + t.amount, 0);
+        
+        return { 
+          message: formatBalance({ total_gastos: totalGastos, total_ingresos: totalIngresos, balance: totalIngresos - totalGastos }), 
+          intent 
+        };
+      }
+      
+      case "consultar_balance_mes": {
+        const today = new Date();
+        const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1)
+          .toISOString().split("T")[0];
+        
+        const [gastos, ingresos] = await Promise.all([
+          transactionRepository.findByUserId(userId, { 
+            type: "gasto", 
+            dateFrom: firstDayOfMonth, 
+            dateTo: today.toISOString().split("T")[0] 
+          }),
+          transactionRepository.findByUserId(userId, { 
+            type: "ingreso", 
+            dateFrom: firstDayOfMonth, 
+            dateTo: today.toISOString().split("T")[0] 
+          }),
         ]);
         
         const totalGastos = gastos.reduce((sum, t) => sum + t.amount, 0);
