@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import Groq from "groq-sdk";
 import { config } from "../config";
 import type { ParsedTransaction } from "../types";
 import { CATEGORIES_KEYWORDS, VALID_CATEGORIES, detectCategoryByKeyword } from "../data/categories";
@@ -10,7 +10,7 @@ const INCOME_KEYWORDS = [
 ];
 
 // =============================================================================
-// PROMPT PARA GEMINI
+// PROMPT PARA GROQ
 // =============================================================================
 
 const NLP_SYSTEM_PROMPT = `Eres un asistente financiero personal. 
@@ -33,16 +33,16 @@ Ejemplos:
 Responde SOLO con JSON válido, sin texto adicional.`;
 
 // =============================================================================
-// CLIENTE GEMINI
+// CLIENTE GROQ
 // =============================================================================
 
-let genAI: GoogleGenerativeAI;
+let groqClient: Groq;
 
-const getGenAI = () => {
-  if (!genAI) {
-    genAI = new GoogleGenerativeAI(config.gemini.apiKey);
+const getGroqClient = () => {
+  if (!groqClient) {
+    groqClient = new Groq({ apiKey: config.groq.apiKey });
   }
-  return genAI;
+  return groqClient;
 };
 
 // =============================================================================
@@ -105,15 +105,27 @@ export async function parseTransactionMessage(
   message: string,
 ): Promise<ParsedTransaction> {
   try {
-    // Usar Gemini para interpretar
-    const ai = getGenAI();
-    const model = ai.getGenerativeModel({ model: "gemini-2.0-flash" });
+    // Usar Groq para interpretar
+    const client = getGroqClient();
     
     const fullPrompt = `${NLP_SYSTEM_PROMPT}\n\nMensaje del usuario: "${message}"`;
-    const result = await model.generateContent(fullPrompt);
-    const responseText = result.response.text();
     
-    console.log('Gemini response:', responseText);
+    const chatCompletion = await client.chat.completions.create({
+      messages: [
+        {
+          role: "user",
+          content: fullPrompt,
+        },
+      ],
+      model: "llama-3.1-70b-versatile",
+      temperature: 0.1,
+      max_tokens: 1024,
+      response_format: { type: "json_object" },
+    });
+    
+    const responseText = chatCompletion.choices[0]?.message?.content || "";
+    
+    console.log('Groq response:', responseText);
 
     // Parsear respuesta JSON
     const cleanedText = responseText
@@ -142,8 +154,8 @@ export async function parseTransactionMessage(
     };
     
   } catch (error) {
-    // Fallback local si Gemini falla
-    console.error('Gemini failed, using local parser:', error);
+    // Fallback local si Groq falla
+    console.error('Groq failed, using local parser:', error);
     return parseLocally(message);
   }
 }
