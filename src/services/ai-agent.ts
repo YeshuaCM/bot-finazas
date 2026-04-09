@@ -318,12 +318,33 @@ export async function runAgent(userMessage: string, userId: number): Promise<Age
         const today = new Date().toISOString().split("T")[0];
         
         const [gastos, ingresos] = await Promise.all([
-          transactionRepository.findByUserId(userId, { type: "gasto", dateTo: today }),
-          transactionRepository.findByUserId(userId, { type: "ingreso", dateTo: today }),
+          transactionRepository.findByUserId(userId, { 
+            type: "gasto", 
+            dateFrom: today, 
+            dateTo: today 
+          }),
+          transactionRepository.findByUserId(userId, { 
+            type: "ingreso", 
+            dateFrom: today, 
+            dateTo: today 
+          }),
         ]);
         
         const totalGastos = gastos.reduce((sum, t) => sum + t.amount, 0);
         const totalIngresos = ingresos.reduce((sum, t) => sum + t.amount, 0);
+        
+        // Si no hay transacciones hoy, buscar las últimas
+        if (gastos.length === 0 && ingresos.length === 0) {
+          const ultimasTransacciones = await transactionRepository.findByUserId(userId, { limit: 5 });
+          if (ultimasTransacciones.length > 0) {
+            return { 
+              message: "No hay transacciones registradas HOY. "
+                + "Tu última transacción fue: " 
+                + `${ultimasTransacciones[0].type === "gasto" ? "💸" : "💵"} $${ultimasTransacciones[0].amount.toLocaleString("es-CL")} ${ultimasTransacciones[0].description ? `- ${ultimasTransacciones[0].description}` : ""}`,
+              intent 
+            };
+          }
+        }
         
         return { 
           message: formatBalance({ total_gastos: totalGastos, total_ingresos: totalIngresos, balance: totalIngresos - totalGastos }), 
