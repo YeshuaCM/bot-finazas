@@ -13,6 +13,8 @@ type Intent =
   | "consultar_gastos_hoy"
   | "consultar_gastos_ayer"
   | "consultar_gastos_semana"
+  | "resumen_diario"
+  | "resumen_semanal"
   | "consultar_gastos_mes"
   | "consultar_balance"
   | "consultar_balance_mes"
@@ -38,6 +40,8 @@ Tu lavoro es ANALIZAR el mensaje del usuario y devolver SOLO un intent de los si
 - "consultar_balance": Pregunta sobre balance TOTAL (cuánto tengo, balance)
 - "consultar_balance_mes": Pregunta sobre balance del MES (este mes, mes pasado)
 - "consultar_por_categoria": Pregunta breakdown por categoría
+- "resumen_diario": Pide resumen del día (qué tal el día, cómo estuvo hoy)
+- "resumen_semanal": Pide resumen de la semana
 - "saludar": Saludos (hola, buenas, hello, qué tal)
 - "ayuda": Pide ayuda o comandos
 - "desconocido": No sabes qué quiere
@@ -67,6 +71,78 @@ function formatBalance(data: { total_gastos: number; total_ingresos: number; bal
     + `Ingresos: $${data.total_ingresos.toLocaleString("es-CL")}\n`
     + `Gastos: $${data.total_gastos.toLocaleString("es-CL")}\n`
     + `*Disponible:* $${data.balance.toLocaleString("es-CL")}`;
+}
+
+function formatResumenDiario(gastos: Array<{ amount: number; description?: string }>, ingresos: Array<{ amount: number; description?: string }>): string {
+  const totalGastos = gastos.reduce((sum, t) => sum + t.amount, 0);
+  const totalIngresos = ingresos.reduce((sum, t) => sum + t.amount, 0);
+  const balance = totalIngresos - totalGastos;
+  
+  let mensaje = `📊 *Resumen de HOY*\n\n`;
+  
+  mensaje += `💵 Ingresos: $${totalIngresos.toLocaleString("es-CL")}\n`;
+  mensaje += `💸 Gastos: $${totalGastos.toLocaleString("es-CL")}\n`;
+  
+  if (ingresos.length > 0) {
+    const ultIngreso = ingresos[0];
+    mensaje += `\nÚltimo ingreso: $${ultIngreso.amount.toLocaleString("es-CL")}${ultIngreso.description ? ` (${ultIngreso.description})` : ""}`;
+  }
+  
+  if (gastos.length > 0) {
+    const ultGasto = gastos[gastos.length - 1];
+    mensaje += `\nÚltimo gasto: $${ultGasto.amount.toLocaleString("es-CL")}${ultGasto.description ? ` (${ultGasto.description})` : ""}`;
+  }
+  
+  const emojiBalance = balance >= 0 ? "📈" : "📉";
+  mensaje += `\n\n${emojiBalance} *Balance:* $${balance.toLocaleString("es-CL")}`;
+  
+  if (gastos.length > 0) {
+    const topGastos = [...gastos].sort((a, b) => b.amount - a.amount).slice(0, 3);
+    mensaje += `\n\n*Top gastos:*`;
+    topGastos.forEach(g => {
+      mensaje += `\n• $${g.amount.toLocaleString("es-CL")}${g.description ? ` - ${g.description}` : ""}`;
+    });
+  }
+  
+  return mensaje;
+}
+
+function formatResumenSemanal(gastos: Array<{ amount: number; description?: string; transaction_date?: string }>, ingresos: Array<{ amount: number; description?: string; transaction_date?: string }>): string {
+  const totalGastos = gastos.reduce((sum, t) => sum + t.amount, 0);
+  const totalIngresos = ingresos.reduce((sum, t) => sum + t.amount, 0);
+  const balance = totalIngresos - totalGastos;
+  
+  const diasConGastos = new Set(gastos.map(g => g.transaction_date)).size;
+  const diasConIngresos = new Set(ingresos.map(i => i.transaction_date)).size;
+  
+  let mensaje = `📊 *Resumen de la SEMANA*\n\n`;
+  
+  mensaje += `💵 Ingresos: $${totalIngresos.toLocaleString("es-CL")} (${ingresos.length} transacción${ingresos.length !== 1 ? "es" : ""})\n`;
+  mensaje += `💸 Gastos: $${totalGastos.toLocaleString("es-CL")} (${gastos.length} transacción${gastos.length !== 1 ? "es" : ""})\n`;
+  
+  const promedioGastos = diasConGastos > 0 ? Math.round(totalGastos / diasConGastos) : 0;
+  mensaje += `\n📊 Promedio diario: $${promedioGastos.toLocaleString("es-CL")}/día`;
+  
+  const emojiBalance = balance >= 0 ? "📈" : "📉";
+  mensaje += `\n\n${emojiBalance} *Balance:* $${balance.toLocaleString("es-CL")}`;
+  
+  // Agrupar por categoría
+  const grouped: Record<string, number> = {};
+  for (const g of gastos) {
+    const cat = g.description?.split(" ")[0] || "otros";
+    grouped[cat] = (grouped[cat] || 0) + g.amount;
+  }
+  
+  const entries = Object.entries(grouped).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  if (entries.length > 0) {
+    mensaje += `\n\n*Por categoría:*`;
+    entries.forEach(([cat, amount]) => {
+      const pct = totalGastos > 0 ? ((amount / totalGastos) * 100).toFixed(0) : "0";
+      mensaje += `\n• ${cat}: $${amount.toLocaleString("es-CL")} (${pct}%)`;
+    });
+  }
+  
+  return mensaje;
 }
 
 function getSaludo(): string {
@@ -132,6 +208,8 @@ async function detectIntent(message: string): Promise<Intent> {
     "consultar_balance": "consultar_balance",
     "consultar_balance_mes": "consultar_balance_mes",
     "consultar_por_categoria": "consultar_por_categoria",
+    "resumen_diario": "resumen_diario",
+    "resumen_semanal": "resumen_semanal",
     "saludar": "saludar",
     "ayuda": "ayuda",
     "desconocido": "desconocido",
@@ -276,6 +354,51 @@ export async function runAgent(userMessage: string, userId: number): Promise<Age
         
         return { 
           message: formatBalance({ total_gastos: totalGastos, total_ingresos: totalIngresos, balance: totalIngresos - totalGastos }), 
+          intent 
+        };
+      }
+      
+      case "resumen_diario": {
+        const today = new Date().toISOString().split("T")[0];
+        
+        const [gastos, ingresos] = await Promise.all([
+          transactionRepository.findByUserId(userId, { 
+            type: "gasto", 
+            dateFrom: today, 
+            dateTo: today 
+          }),
+          transactionRepository.findByUserId(userId, { 
+            type: "ingreso", 
+            dateFrom: today, 
+            dateTo: today 
+          }),
+        ]);
+        
+        return { 
+          message: formatResumenDiario(gastos, ingresos), 
+          intent 
+        };
+      }
+      
+      case "resumen_semanal": {
+        const today = new Date();
+        const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+        
+        const [gastos, ingresos] = await Promise.all([
+          transactionRepository.findByUserId(userId, { 
+            type: "gasto", 
+            dateFrom: weekAgo.toISOString().split("T")[0], 
+            dateTo: today.toISOString().split("T")[0] 
+          }),
+          transactionRepository.findByUserId(userId, { 
+            type: "ingreso", 
+            dateFrom: weekAgo.toISOString().split("T")[0], 
+            dateTo: today.toISOString().split("T")[0] 
+          }),
+        ]);
+        
+        return { 
+          message: formatResumenSemanal(gastos, ingresos), 
           intent 
         };
       }
