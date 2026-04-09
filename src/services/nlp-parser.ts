@@ -135,22 +135,28 @@ export async function parseTransactionMessage(
     
     const parsed = JSON.parse(cleanedText);
     
+    // Si el tipo es null/undefined, detectar localmente
+    let tipo = parsed.tipo as 'gasto' | 'ingreso' | null;
+    if (!tipo) {
+      console.log('Tipo inválido, detectando localmente');
+      tipo = isIncomeMessage(message) ? 'ingreso' : 'gasto';
+    }
+    
     // Si la categoría es inválida o falta, usar categorizador local
     let categoria = parsed.categoria;
-    const tipoKey = parsed.tipo as 'gasto' | 'ingreso';
-    const validCats = VALID_CATEGORIES[tipoKey] || VALID_CATEGORIES.gasto;
+    const validCats = VALID_CATEGORIES[tipo] || VALID_CATEGORIES.gasto;
     if (!categoria || !validCats.includes(categoria)) {
       console.log('Categoría inválida, usando categorizador local');
-      categoria = detectCategoryByKeyword(message, parsed.tipo as 'gasto' | 'ingreso');
+      categoria = detectCategoryByKeyword(message, tipo);
     }
     
     return {
-      tipo: parsed.tipo,
+      tipo,
       monto: Number(parsed.monto),
       categoria,
-      descripcion: parsed.descripcion,
-      confianza: parsed.confianza || 0.8,
-      requiereConfirmacion: parsed.confianza < 0.7,
+      descripcion: parsed.descripcion || message.substring(0, 50),
+      confianza: parsed.confianza ?? 0.8,
+      requiereConfirmacion: (parsed.confianza ?? 0.8) < 0.7,
     };
     
   } catch (error) {
