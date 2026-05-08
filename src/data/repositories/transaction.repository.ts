@@ -1,5 +1,6 @@
 import { supabase } from '../supabase';
 import type { Transaction } from '../../types';
+import { getBogotaDateString } from '../../utils/date.utils';
 
 export const transactionRepository = {
   // Crear transacción
@@ -19,7 +20,7 @@ export const transactionRepository = {
         amount: data.amount,
         category_id: data.category_id,
         description: data.description,
-        transaction_date: data.transaction_date || new Date().toISOString().split('T')[0],
+        transaction_date: data.transaction_date || getBogotaDateString(),
       })
       .select()
       .single();
