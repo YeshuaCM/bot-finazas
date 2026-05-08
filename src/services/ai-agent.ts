@@ -1,6 +1,7 @@
 import Groq from "groq-sdk";
 import { config } from "../config";
 import { transactionRepository } from "../data/repositories/transaction.repository";
+import { getBogotaDateString } from "../utils/date.utils";
 
 // =============================================================================
 // CONSTANTS
@@ -512,7 +513,7 @@ export async function runAgent(userMessage: string, userId: number): Promise<Age
       }
       
       case "consultar_gastos_hoy": {
-        const today = new Date().toISOString().split("T")[0];
+        const today = getBogotaDateString();
         const gastos = await transactionRepository.findByUserId(userId, {
           type: "gasto",
           dateFrom: today,
@@ -526,9 +527,9 @@ export async function runAgent(userMessage: string, userId: number): Promise<Age
       }
       
       case "consultar_gastos_ayer": {
-        const yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1);
-        const yesterdayStr = yesterday.toISOString().split("T")[0];
+        const today = new Date();
+        today.setDate(today.getDate() - 1);
+        const yesterdayStr = today.toISOString().split("T")[0];
         
         const gastos = await transactionRepository.findByUserId(userId, {
           type: "gasto",
@@ -543,14 +544,15 @@ export async function runAgent(userMessage: string, userId: number): Promise<Age
       }
       
       case "consultar_gastos_mes": {
-        const today = new Date();
-        const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1)
-          .toISOString().split("T")[0];
+        const today = getBogotaDateString();
+        const firstDay = new Date();
+        firstDay.setDate(1);
+        const firstDayStr = firstDay.toISOString().split("T")[0];
         
         const gastos = await transactionRepository.findByUserId(userId, {
           type: "gasto",
-          dateFrom: firstDayOfMonth,
-          dateTo: today.toISOString().split("T")[0],
+          dateFrom: firstDayStr,
+          dateTo: today,
         });
         
         return { 
@@ -576,7 +578,7 @@ export async function runAgent(userMessage: string, userId: number): Promise<Age
       }
       
       case "consultar_balance": {
-        const today = new Date().toISOString().split("T")[0];
+        const today = getBogotaDateString();
         
         const [gastos, ingresos] = await Promise.all([
           transactionRepository.findByUserId(userId, { 
@@ -614,20 +616,21 @@ export async function runAgent(userMessage: string, userId: number): Promise<Age
       }
       
       case "consultar_balance_mes": {
-        const today = new Date();
-        const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1)
-          .toISOString().split("T")[0];
+        const today = getBogotaDateString();
+        const firstDay = new Date();
+        firstDay.setDate(1);
+        const firstDayStr = firstDay.toISOString().split("T")[0];
         
         const [gastos, ingresos] = await Promise.all([
           transactionRepository.findByUserId(userId, { 
             type: "gasto", 
-            dateFrom: firstDayOfMonth, 
-            dateTo: today.toISOString().split("T")[0] 
+            dateFrom: firstDayStr, 
+            dateTo: today
           }),
           transactionRepository.findByUserId(userId, { 
             type: "ingreso", 
-            dateFrom: firstDayOfMonth, 
-            dateTo: today.toISOString().split("T")[0] 
+            dateFrom: firstDayStr, 
+            dateTo: today
           }),
         ]);
         
@@ -639,7 +642,7 @@ export async function runAgent(userMessage: string, userId: number): Promise<Age
       }
       
       case "resumen_diario": {
-        const today = new Date().toISOString().split("T")[0];
+        const today = getBogotaDateString();
         
         const [gastos, ingresos] = await Promise.all([
           transactionRepository.findByUserId(userId, { 
