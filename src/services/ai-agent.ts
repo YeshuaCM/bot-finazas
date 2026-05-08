@@ -1,7 +1,23 @@
 import Groq from "groq-sdk";
 import { config } from "../config";
 import { transactionRepository } from "../data/repositories/transaction.repository";
-import { categoryRepository } from "../data/repositories/category.repository";
+
+// =============================================================================
+// CONSTANTS
+// =============================================================================
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const MS_PER_WEEK = 7 * MS_PER_DAY;
+const MAX_MESSAGE_LENGTH = 500;
+const MAX_LOG_LENGTH = 100;
+const MAX_DAYS_TO_SHOW = 15;
+const DEFAULT_RECENT_LIMIT = 5;
+const MAX_MESSAGE_SIZE = MAX_MESSAGE_LENGTH * 2;
+
+const GROQ_INTENT_CONFIG = {
+  temperature: 0.1,
+  max_tokens: 50,
+} as const;
 
 // =============================================================================
 // INTENTS DEFINITION
@@ -52,6 +68,76 @@ Responde SOLO con el intent, nada más.`;
 // RESPONSE TEMPLATES
 // =============================================================================
 
+interface TransactionWithTime {
+  amount: number;
+  description?: string;
+  created_at?: string;
+  transaction_date?: string;
+}
+
+/**
+ * Extrae la hora de una transacción desde created_at
+ * @returns Formato HH:MM o "--:--" si no hay fecha
+ */
+function extractTime(createdAt?: string): string {
+  if (!createdAt) return "--:--";
+  try {
+    const date = new Date(createdAt);
+    const hours = date.getHours().toString().padStart(2, "0");
+    const minutes = date.getMinutes().toString().padStart(2, "0");
+    return `${hours}:${minutes}`;
+  } catch {
+    return "--:--";
+  }
+}
+
+/**
+ * Formatea una transacción individual con hora
+ */
+function formatTransactionLine(
+  transaction: TransactionWithTime,
+  type: "gasto" | "ingreso"
+): string {
+  const time = extractTime(transaction.created_at);
+  const emoji = type === "gasto" ? "•" : "•";
+  return `${time} - $${transaction.amount.toLocaleString("es-CL")}${transaction.description ? ` (${transaction.description})` : ""}`;
+}
+
+/**
+ * Formatea lista de transacciones con hora (para ingresos o gastos)
+ */
+function formatTransactionList(
+  transactions: TransactionWithTime[],
+  type: "gasto" | "ingreso"
+): string {
+  if (transactions.length === 0) {
+    return type === "gasto" ? "No hay gastos registrados." : "No hay ingresos registrados.";
+  }
+
+  const lines = transactions.map((t) => formatTransactionLine(t, type));
+  return lines.join("\n");
+}
+
+/**
+ * Formatea lista de transacciones (genérica para cualquier tipo)
+ * Útil para resúmenes cuando se mezclan ingresos y gastos
+ */
+function formatTransactions(
+  transactions: Array<TransactionWithTime & { type: "gasto" | "ingreso" }>
+): string {
+  if (transactions.length === 0) {
+    return "No hay transacciones registradas.";
+  }
+
+  const lines = transactions.map((t) => {
+    const emoji = t.type === "gasto" ? "💸" : "💵";
+    const time = extractTime(t.created_at);
+    return `${emoji} ${time} - $${t.amount.toLocaleString("es-CL")}${t.description ? ` (${t.description})` : ""}`;
+  });
+
+  return lines.join("\n");
+}
+
 function formatGastos(transactions: Array<{ amount: number; description?: string }>): string {
   if (transactions.length === 0) {
     return "No tienes gastos registrados hoy.";
@@ -73,75 +159,234 @@ function formatBalance(data: { total_gastos: number; total_ingresos: number; bal
     + `*Disponible:* $${data.balance.toLocaleString("es-CL")}`;
 }
 
-function formatResumenDiario(gastos: Array<{ amount: number; description?: string }>, ingresos: Array<{ amount: number; description?: string }>): string {
+/**
+ * Formatea resumen diario con TODAS las transacciones listadas con hora
+ */
+function formatResumenDiario(
+  gastos: Array<{ amount: number; description?: string; created_at?: string }>,
+  ingresos: Array<{ amount: number; description?: string; created_at?: string }>
+): string {
   const totalGastos = gastos.reduce((sum, t) => sum + t.amount, 0);
   const totalIngresos = ingresos.reduce((sum, t) => sum + t.amount, 0);
   const balance = totalIngresos - totalGastos;
-  
-  let mensaje = `📊 *Resumen de HOY*\n\n`;
-  
-  mensaje += `💵 Ingresos: $${totalIngresos.toLocaleString("es-CL")}\n`;
-  mensaje += `💸 Gastos: $${totalGastos.toLocaleString("es-CL")}\n`;
-  
-  if (ingresos.length > 0) {
-    const ultIngreso = ingresos[0];
-    mensaje += `\nÚltimo ingreso: $${ultIngreso.amount.toLocaleString("es-CL")}${ultIngreso.description ? ` (${ultIngreso.description})` : ""}`;
-  }
-  
-  if (gastos.length > 0) {
-    const ultGasto = gastos[gastos.length - 1];
-    mensaje += `\nÚltimo gasto: $${ultGasto.amount.toLocaleString("es-CL")}${ultGasto.description ? ` (${ultGasto.description})` : ""}`;
-  }
-  
-  const emojiBalance = balance >= 0 ? "📈" : "📉";
-  mensaje += `\n\n${emojiBalance} *Balance:* $${balance.toLocaleString("es-CL")}`;
-  
-  if (gastos.length > 0) {
-    const topGastos = [...gastos].sort((a, b) => b.amount - a.amount).slice(0, 3);
-    mensaje += `\n\n*Top gastos:*`;
-    topGastos.forEach(g => {
-      mensaje += `\n• $${g.amount.toLocaleString("es-CL")}${g.description ? ` - ${g.description}` : ""}`;
+
+  const today = new Date();
+  const day = today.getDate();
+  const monthNames = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+  const month = monthNames[today.getMonth()];
+  const year = today.getFullYear();
+
+  let mensaje = `📊 Resumen de HOY - ${day} ${month} ${year}\n\n`;
+
+  // Sección de INGRESOS
+  mensaje += `💵 INGRESOS:\n`;
+  if (ingresos.length === 0) {
+    mensaje += `  No hay ingresos registrados\n`;
+  } else {
+    // Ordenar por hora (más reciente primero)
+    const sortedIngresos = [...ingresos].sort((a, b) => {
+      const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return dateB - dateA;
+    });
+    sortedIngresos.forEach(i => {
+      mensaje += `  • ${formatTransactionLine(i, "ingreso")}\n`;
     });
   }
-  
+
+  mensaje += `\n💸 GASTOS:\n`;
+  if (gastos.length === 0) {
+    mensaje += `  No hay gastos registrados\n`;
+  } else {
+    // Ordenar por hora (más reciente primero)
+    const sortedGastos = [...gastos].sort((a, b) => {
+      const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return dateB - dateA;
+    });
+    sortedGastos.forEach(g => {
+      mensaje += `  • ${formatTransactionLine(g, "gasto")}\n`;
+    });
+  }
+
+  mensaje += `\n─────────────────────\n`;
+  mensaje += `💵 Total ingresos: $${totalIngresos.toLocaleString("es-CL")}\n`;
+  mensaje += `💸 Total gastos: $${totalGastos.toLocaleString("es-CL")}\n`;
+
+  const emojiBalance = balance >= 0 ? "📈" : "📉";
+  mensaje += `${emojiBalance} Balance: $${balance.toLocaleString("es-CL")}`;
+
   return mensaje;
 }
 
-function formatResumenSemanal(gastos: Array<{ amount: number; description?: string; transaction_date?: string }>, ingresos: Array<{ amount: number; description?: string; transaction_date?: string }>): string {
+/**
+ * Formatea resumen semanal con TODAS las transacciones agrupadas por día
+ */
+function formatResumenSemanal(
+  gastos: Array<{ amount: number; description?: string; transaction_date?: string; created_at?: string }>,
+  ingresos: Array<{ amount: number; description?: string; transaction_date?: string; created_at?: string }>
+): string {
   const totalGastos = gastos.reduce((sum, t) => sum + t.amount, 0);
   const totalIngresos = ingresos.reduce((sum, t) => sum + t.amount, 0);
   const balance = totalIngresos - totalGastos;
-  
-  const diasConGastos = new Set(gastos.map(g => g.transaction_date)).size;
-  const diasConIngresos = new Set(ingresos.map(i => i.transaction_date)).size;
-  
+
   let mensaje = `📊 *Resumen de la SEMANA*\n\n`;
-  
-  mensaje += `💵 Ingresos: $${totalIngresos.toLocaleString("es-CL")} (${ingresos.length} transacción${ingresos.length !== 1 ? "es" : ""})\n`;
-  mensaje += `💸 Gastos: $${totalGastos.toLocaleString("es-CL")} (${gastos.length} transacción${gastos.length !== 1 ? "es" : ""})\n`;
-  
-  const promedioGastos = diasConGastos > 0 ? Math.round(totalGastos / diasConGastos) : 0;
-  mensaje += `\n📊 Promedio diario: $${promedioGastos.toLocaleString("es-CL")}/día`;
-  
-  const emojiBalance = balance >= 0 ? "📈" : "📉";
-  mensaje += `\n\n${emojiBalance} *Balance:* $${balance.toLocaleString("es-CL")}`;
-  
-  // Agrupar por categoría
-  const grouped: Record<string, number> = {};
-  for (const g of gastos) {
-    const cat = g.description?.split(" ")[0] || "otros";
-    grouped[cat] = (grouped[cat] || 0) + g.amount;
+
+  // Combinar todas las transacciones para agrupar por día
+  const allTransactions = [
+    ...gastos.map((g) => ({ ...g, type: "gasto" as const })),
+    ...ingresos.map((i) => ({ ...i, type: "ingreso" as const })),
+  ];
+
+  if (allTransactions.length === 0) {
+    mensaje += `No hay transacciones esta semana.`;
+    return mensaje;
   }
-  
-  const entries = Object.entries(grouped).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  if (entries.length > 0) {
-    mensaje += `\n\n*Por categoría:*`;
-    entries.forEach(([cat, amount]) => {
-      const pct = totalGastos > 0 ? ((amount / totalGastos) * 100).toFixed(0) : "0";
-      mensaje += `\n• ${cat}: $${amount.toLocaleString("es-CL")} (${pct}%)`;
+
+  // Agrupar por día (transaction_date)
+  const byDay: Record<string, typeof allTransactions> = {};
+  for (const t of allTransactions) {
+    const day = t.transaction_date || "sin fecha";
+    if (!byDay[day]) byDay[day] = [];
+    byDay[day].push(t);
+  }
+
+  // Ordenar días cronológicamente
+  const sortedDays = Object.keys(byDay).sort();
+
+  // Formatear cada día
+  const dayNames = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
+
+  for (const day of sortedDays) {
+    const transactions = byDay[day];
+    const dayDate = new Date(day);
+    const dayName = dayNames[dayDate.getDay()];
+    const dayNum = dayDate.getDate();
+    const month = dayDate.getMonth() + 1;
+
+    const dayTotalGastos = transactions
+      .filter((t) => t.type === "gasto")
+      .reduce((sum, t) => sum + t.amount, 0);
+    const dayTotalIngresos = transactions
+      .filter((t) => t.type === "ingreso")
+      .reduce((sum, t) => sum + t.amount, 0);
+
+    mensaje += `📅 ${dayName} ${dayNum}/${month}\n`;
+    mensaje += `─────────────────────\n`;
+
+    // Ordenar transacciones por hora dentro del día
+    const sortedByTime = [...transactions].sort((a, b) => {
+      const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return dateA - dateB;
     });
+
+    for (const t of sortedByTime) {
+      const emoji = t.type === "gasto" ? "💸" : "💵";
+      const time = extractTime(t.created_at);
+      mensaje += `${emoji} ${time} - $${t.amount.toLocaleString("es-CL")}${t.description ? ` (${t.description})` : ""}\n`;
+    }
+
+    mensaje += `\n💵 Ingresos: $${dayTotalIngresos.toLocaleString("es-CL")}  💸 Gastos: $${dayTotalGastos.toLocaleString("es-CL")}\n\n`;
   }
-  
+
+  // Totales de la semana
+  mensaje += `─────────────────────\n`;
+  mensaje += `💵 Total semana ingresos: $${totalIngresos.toLocaleString("es-CL")} (${ingresos.length} transacción${ingresos.length !== 1 ? "es" : ""})\n`;
+  mensaje += `💸 Total semana gastos: $${totalGastos.toLocaleString("es-CL")} (${gastos.length} transacción${gastos.length !== 1 ? "es" : ""})\n`;
+
+  const emojiBalance = balance >= 0 ? "📈" : "📉";
+  mensaje += `${emojiBalance} Balance: $${balance.toLocaleString("es-CL")}`;
+
+  return mensaje;
+}
+
+/**
+ * Formatea resumen mensual con TODAS las transacciones agrupadas por día
+ */
+function formatResumenMensual(
+  gastos: Array<{ amount: number; description?: string; transaction_date?: string; created_at?: string }>,
+  ingresos: Array<{ amount: number; description?: string; transaction_date?: string; created_at?: string }>
+): string {
+  const totalGastos = gastos.reduce((sum, t) => sum + t.amount, 0);
+  const totalIngresos = ingresos.reduce((sum, t) => sum + t.amount, 0);
+  const balance = totalIngresos - totalGastos;
+
+  const today = new Date();
+  const monthNames = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+  const monthName = monthNames[today.getMonth()];
+
+  let mensaje = `📊 *Resumen de ${monthName} ${today.getFullYear()}*\n\n`;
+
+  // Combinar todas las transacciones para agrupar por día
+  const allTransactions = [
+    ...gastos.map((g) => ({ ...g, type: "gasto" as const })),
+    ...ingresos.map((i) => ({ ...i, type: "ingreso" as const })),
+  ];
+
+  if (allTransactions.length === 0) {
+    mensaje += `No hay transacciones este mes.`;
+    return mensaje;
+  }
+
+  // Agrupar por día (transaction_date)
+  const byDay: Record<string, typeof allTransactions> = {};
+  for (const t of allTransactions) {
+    const day = t.transaction_date || "sin fecha";
+    if (!byDay[day]) byDay[day] = [];
+    byDay[day].push(t);
+  }
+
+  // Ordenar días cronológicamente
+  const sortedDays = Object.keys(byDay).sort().reverse(); // más recientes primero
+
+  // Mostrar máximo días configurados para no exceder límites de mensaje
+  const daysToShow = sortedDays.slice(0, MAX_DAYS_TO_SHOW);
+
+  // Formatear cada día
+  for (const day of daysToShow) {
+    const transactions = byDay[day];
+    const dayDate = new Date(day);
+    const dayNum = dayDate.getDate();
+
+    const dayTotalGastos = transactions
+      .filter((t) => t.type === "gasto")
+      .reduce((sum, t) => sum + t.amount, 0);
+    const dayTotalIngresos = transactions
+      .filter((t) => t.type === "ingreso")
+      .reduce((sum, t) => sum + t.amount, 0);
+
+    mensaje += `📅 ${dayNum}\n`;
+    mensaje += `─────────────────────\n`;
+
+    // Ordenar transacciones por hora dentro del día
+    const sortedByTime = [...transactions].sort((a, b) => {
+      const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return dateA - dateB;
+    });
+
+    for (const t of sortedByTime) {
+      const emoji = t.type === "gasto" ? "💸" : "💵";
+      const time = extractTime(t.created_at);
+      mensaje += `${emoji} ${time} - $${t.amount.toLocaleString("es-CL")}${t.description ? ` (${t.description})` : ""}\n`;
+    }
+
+    mensaje += `\n💵: $${dayTotalIngresos.toLocaleString("es-CL")}  💸: $${dayTotalGastos.toLocaleString("es-CL")}\n\n`;
+  }
+
+  if (sortedDays.length > MAX_DAYS_TO_SHOW) {
+    mensaje += `... y ${sortedDays.length - MAX_DAYS_TO_SHOW} días más\n\n`;
+  }
+
+  // Totales del mes
+  mensaje += `─────────────────────\n`;
+  mensaje += `💵 Total mes ingresos: $${totalIngresos.toLocaleString("es-CL")} (${ingresos.length} transacción${ingresos.length !== 1 ? "es" : ""})\n`;
+  mensaje += `💸 Total mes gastos: $${totalGastos.toLocaleString("es-CL")} (${gastos.length} transacción${gastos.length !== 1 ? "es" : ""})\n`;
+
+  const emojiBalance = balance >= 0 ? "📈" : "📉";
+  mensaje += `${emojiBalance} Balance: $${balance.toLocaleString("es-CL")}`;
+
   return mensaje;
 }
 
@@ -183,39 +428,43 @@ const getGroqClient = () => {
 };
 
 async function detectIntent(message: string): Promise<Intent> {
-  const client = getGroqClient();
-  
-  const completion = await client.chat.completions.create({
-    messages: [
-      { role: "system", content: INTENT_SYSTEM_PROMPT },
-      { role: "user", content: message },
-    ],
-    model: "llama-3.1-8b-instant",
-    temperature: 0.1,
-    max_tokens: 50,
-  });
-  
-  const intent = completion.choices[0]?.message?.content?.trim().toLowerCase();
-  
-  // Mapear a tipo válido
-  const intentMap: Record<string, Intent> = {
-    "registrar_gasto": "registrar_gasto",
-    "registrar_ingreso": "registrar_ingreso",
-    "consultar_gastos_hoy": "consultar_gastos_hoy",
-    "consultar_gastos_ayer": "consultar_gastos_ayer",
-    "consultar_gastos_semana": "consultar_gastos_semana",
-    "consultar_gastos_mes": "consultar_gastos_mes",
-    "consultar_balance": "consultar_balance",
-    "consultar_balance_mes": "consultar_balance_mes",
-    "consultar_por_categoria": "consultar_por_categoria",
-    "resumen_diario": "resumen_diario",
-    "resumen_semanal": "resumen_semanal",
-    "saludar": "saludar",
-    "ayuda": "ayuda",
-    "desconocido": "desconocido",
-  };
-  
-  return intentMap[intent || ""] || "desconocido";
+  try {
+    const client = getGroqClient();
+    
+    const completion = await client.chat.completions.create({
+      messages: [
+        { role: "system", content: INTENT_SYSTEM_PROMPT },
+        { role: "user", content: message },
+      ],
+      model: "llama-3.1-8b-instant",
+      ...GROQ_INTENT_CONFIG,
+    });
+    
+    const intent = completion.choices[0]?.message?.content?.trim().toLowerCase();
+    
+    // Mapear a tipo válido
+    const intentMap: Record<string, Intent> = {
+      "registrar_gasto": "registrar_gasto",
+      "registrar_ingreso": "registrar_ingreso",
+      "consultar_gastos_hoy": "consultar_gastos_hoy",
+      "consultar_gastos_ayer": "consultar_gastos_ayer",
+      "consultar_gastos_semana": "consultar_gastos_semana",
+      "consultar_gastos_mes": "consultar_gastos_mes",
+      "consultar_balance": "consultar_balance",
+      "consultar_balance_mes": "consultar_balance_mes",
+      "consultar_por_categoria": "consultar_por_categoria",
+      "resumen_diario": "resumen_diario",
+      "resumen_semanal": "resumen_semanal",
+      "saludar": "saludar",
+      "ayuda": "ayuda",
+      "desconocido": "desconocido",
+    };
+    
+    return intentMap[intent || ""] || "desconocido";
+  } catch (error) {
+    console.error("Error detecting intent:", error);
+    return "desconocido";
+  }
 }
 
 // =============================================================================
@@ -235,8 +484,20 @@ export interface AgentResponse {
 }
 
 export async function runAgent(userMessage: string, userId: number): Promise<AgentResponse> {
+  const safeMessage = userMessage.length > MAX_LOG_LENGTH 
+    ? `${userMessage.substring(0, MAX_LOG_LENGTH)}...` 
+    : userMessage;
+  
+  // Validar longitud del mensaje
+  if (userMessage.length > MAX_MESSAGE_SIZE) {
+    return {
+      message: "El mensaje es demasiado largo. Intentá con algo más corto.",
+      intent: "desconocido",
+    };
+  }
+  
   const intent = await detectIntent(userMessage);
-  console.log("AI Intent detected:", intent, "message:", userMessage);
+  console.log(`AI Intent: ${intent} | User: ${userId} | Msg: ${safeMessage}`);
   
   const client = getGroqClient();
   
@@ -300,7 +561,7 @@ export async function runAgent(userMessage: string, userId: number): Promise<Age
       
       case "consultar_gastos_semana": {
         const today = new Date();
-        const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+        const weekAgo = new Date(today.getTime() - MS_PER_WEEK);
         
         const gastos = await transactionRepository.findByUserId(userId, {
           type: "gasto",
@@ -335,7 +596,7 @@ export async function runAgent(userMessage: string, userId: number): Promise<Age
         
         // Si no hay transacciones hoy, buscar las últimas
         if (gastos.length === 0 && ingresos.length === 0) {
-          const ultimasTransacciones = await transactionRepository.findByUserId(userId, { limit: 5 });
+          const ultimasTransacciones = await transactionRepository.findByUserId(userId, { limit: DEFAULT_RECENT_LIMIT });
           if (ultimasTransacciones.length > 0) {
             return { 
               message: "No hay transacciones registradas HOY. "
@@ -370,11 +631,9 @@ export async function runAgent(userMessage: string, userId: number): Promise<Age
           }),
         ]);
         
-        const totalGastos = gastos.reduce((sum, t) => sum + t.amount, 0);
-        const totalIngresos = ingresos.reduce((sum, t) => sum + t.amount, 0);
-        
+        // Usar el formato de resumen mensual que lista todas las transacciones
         return { 
-          message: formatBalance({ total_gastos: totalGastos, total_ingresos: totalIngresos, balance: totalIngresos - totalGastos }), 
+          message: formatResumenMensual(gastos, ingresos), 
           intent 
         };
       }
@@ -496,7 +755,7 @@ export async function runAgent(userMessage: string, userId: number): Promise<Age
       }
     }
   } catch (error) {
-    console.error("AI Agent error:", error);
+    console.error(`AI Agent error (user ${userId}):`, error);
     return {
       message: "Tuve un problema al procesar tu solicitud. Probá de nuevo.",
       intent: "desconocido",
