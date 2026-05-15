@@ -2,6 +2,8 @@ import Groq from "groq-sdk";
 import { config } from "../config";
 import { transactionRepository } from "../data/repositories/transaction.repository";
 import { getBogotaDateString } from "../utils/date.utils";
+import { categorize } from "./categorizer";
+import { categoryRepository } from "../data/repositories/category.repository";
 
 // =============================================================================
 // CONSTANTS
@@ -77,31 +79,13 @@ interface TransactionWithTime {
 }
 
 /**
- * Extrae la hora de una transacción desde created_at
- * @returns Formato HH:MM o "--:--" si no hay fecha
- */
-function extractTime(createdAt?: string): string {
-  if (!createdAt) return "--:--";
-  try {
-    const date = new Date(createdAt);
-    const hours = date.getHours().toString().padStart(2, "0");
-    const minutes = date.getMinutes().toString().padStart(2, "0");
-    return `${hours}:${minutes}`;
-  } catch {
-    return "--:--";
-  }
-}
-
-/**
- * Formatea una transacción individual con hora
+ * Formatea una transacción individual (sin hora, solo monto y descripción)
  */
 function formatTransactionLine(
   transaction: TransactionWithTime,
   type: "gasto" | "ingreso"
 ): string {
-  const time = extractTime(transaction.created_at);
-  const emoji = type === "gasto" ? "•" : "•";
-  return `${time} - $${transaction.amount.toLocaleString("es-CL")}${transaction.description ? ` (${transaction.description})` : ""}`;
+  return `• $${transaction.amount.toLocaleString("es-CL")}${transaction.description ? ` - ${transaction.description}` : ""}`;
 }
 
 /**
@@ -132,8 +116,7 @@ function formatTransactions(
 
   const lines = transactions.map((t) => {
     const emoji = t.type === "gasto" ? "💸" : "💵";
-    const time = extractTime(t.created_at);
-    return `${emoji} ${time} - $${t.amount.toLocaleString("es-CL")}${t.description ? ` (${t.description})` : ""}`;
+    return `${emoji} $${t.amount.toLocaleString("es-CL")}${t.description ? ` - ${t.description}` : ""}`;
   });
 
   return lines.join("\n");
@@ -161,7 +144,7 @@ function formatBalance(data: { total_gastos: number; total_ingresos: number; bal
 }
 
 /**
- * Formatea resumen diario con TODAS las transacciones listadas con hora
+ * Formatea resumen diario con TODAS las transacciones (sin hora)
  */
 function formatResumenDiario(
   gastos: Array<{ amount: number; description?: string; created_at?: string }>,
@@ -184,14 +167,8 @@ function formatResumenDiario(
   if (ingresos.length === 0) {
     mensaje += `  No hay ingresos registrados\n`;
   } else {
-    // Ordenar por hora (más reciente primero)
-    const sortedIngresos = [...ingresos].sort((a, b) => {
-      const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
-      const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
-      return dateB - dateA;
-    });
-    sortedIngresos.forEach(i => {
-      mensaje += `  • ${formatTransactionLine(i, "ingreso")}\n`;
+    ingresos.forEach(i => {
+      mensaje += `  • $${i.amount.toLocaleString("es-CL")}${i.description ? ` - ${i.description}` : ""}\n`;
     });
   }
 
@@ -199,14 +176,8 @@ function formatResumenDiario(
   if (gastos.length === 0) {
     mensaje += `  No hay gastos registrados\n`;
   } else {
-    // Ordenar por hora (más reciente primero)
-    const sortedGastos = [...gastos].sort((a, b) => {
-      const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
-      const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
-      return dateB - dateA;
-    });
-    sortedGastos.forEach(g => {
-      mensaje += `  • ${formatTransactionLine(g, "gasto")}\n`;
+    gastos.forEach(g => {
+      mensaje += `  • $${g.amount.toLocaleString("es-CL")}${g.description ? ` - ${g.description}` : ""}\n`;
     });
   }
 
@@ -275,17 +246,9 @@ function formatResumenSemanal(
     mensaje += `📅 ${dayName} ${dayNum}/${month}\n`;
     mensaje += `─────────────────────\n`;
 
-    // Ordenar transacciones por hora dentro del día
-    const sortedByTime = [...transactions].sort((a, b) => {
-      const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
-      const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
-      return dateA - dateB;
-    });
-
-    for (const t of sortedByTime) {
+    for (const t of transactions) {
       const emoji = t.type === "gasto" ? "💸" : "💵";
-      const time = extractTime(t.created_at);
-      mensaje += `${emoji} ${time} - $${t.amount.toLocaleString("es-CL")}${t.description ? ` (${t.description})` : ""}\n`;
+      mensaje += `${emoji} $${t.amount.toLocaleString("es-CL")}${t.description ? ` - ${t.description}` : ""}\n`;
     }
 
     mensaje += `\n💵 Ingresos: $${dayTotalIngresos.toLocaleString("es-CL")}  💸 Gastos: $${dayTotalGastos.toLocaleString("es-CL")}\n\n`;
@@ -360,17 +323,9 @@ function formatResumenMensual(
     mensaje += `📅 ${dayNum}\n`;
     mensaje += `─────────────────────\n`;
 
-    // Ordenar transacciones por hora dentro del día
-    const sortedByTime = [...transactions].sort((a, b) => {
-      const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
-      const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
-      return dateA - dateB;
-    });
-
-    for (const t of sortedByTime) {
+    for (const t of transactions) {
       const emoji = t.type === "gasto" ? "💸" : "💵";
-      const time = extractTime(t.created_at);
-      mensaje += `${emoji} ${time} - $${t.amount.toLocaleString("es-CL")}${t.description ? ` (${t.description})` : ""}\n`;
+      mensaje += `${emoji} $${t.amount.toLocaleString("es-CL")}${t.description ? ` - ${t.description}` : ""}\n`;
     }
 
     mensaje += `\n💵: $${dayTotalIngresos.toLocaleString("es-CL")}  💸: $${dayTotalGastos.toLocaleString("es-CL")}\n\n`;
@@ -480,6 +435,7 @@ export interface AgentResponse {
     tipo?: "gasto" | "ingreso";
     monto?: number;
     categoria?: string;
+    categoriaId?: string;
     descripcion?: string;
   };
 }
@@ -728,10 +684,24 @@ export async function runAgent(userMessage: string, userId: number): Promise<Age
         
         const tipo = intent === "registrar_gasto" ? "gasto" : "ingreso";
         
+        // Usar categorizer para clasificar automáticamente
+        let categoria: string = "otros";
+        let categoriaBD = null;
+        try {
+          const categoriaObj = await categorize(userId, parsed.descripcion || userMessage, tipo);
+          categoria = categoriaObj.name;
+          categoriaBD = categoriaObj;
+        } catch (error) {
+          console.error("Error categorizing:", error);
+          // Fallback a "otros"
+          categoria = tipo === "gasto" ? "otros" : "otro";
+        }
+        
         return {
           message: `¿Confirmás este ${tipo}?\n\n`
             + `💰 Monto: $${parsed.monto.toLocaleString("es-CL")}\n`
-            + `📝 Descripción: ${parsed.descripcion || userMessage}\n\n`
+            + `📝 Descripción: ${parsed.descripcion || userMessage}\n`
+            + `🏷️ Categoría: ${categoria}\n\n`
             + `Si está correcto, decí "sí" o "confirmar"`,
           intent,
           requiresConfirmation: true,
@@ -739,6 +709,8 @@ export async function runAgent(userMessage: string, userId: number): Promise<Age
             tipo,
             monto: parsed.monto,
             descripcion: parsed.descripcion,
+            categoria,
+            categoriaId: categoriaBD?.id,
           },
         };
       }
@@ -774,7 +746,8 @@ export async function confirmarTransaccion(
   userId: number,
   tipo: "gasto" | "ingreso",
   monto: number,
-  descripcion?: string
+  descripcion?: string,
+  categoryId?: string
 ): Promise<{ success: boolean; message: string }> {
   try {
     await transactionRepository.create({
@@ -782,6 +755,7 @@ export async function confirmarTransaccion(
       type: tipo,
       amount: monto,
       description: descripcion,
+      category_id: categoryId,
     });
     
     return {

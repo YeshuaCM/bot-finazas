@@ -10,6 +10,7 @@ interface ConversationSession {
   type?: 'gasto' | 'ingreso';
   amount?: number;
   category?: string;
+  categoryId?: string;
   description?: string;
   rawMessage?: string;
 }
@@ -99,7 +100,8 @@ export function registerConversations(bot: Bot) {
             user.telegram_id,
             session.type,
             session.amount,
-            session.description
+            session.description,
+            session.categoryId
           );
           await ctx.reply(result.message);
           sessions.delete(telegramId);
@@ -115,6 +117,8 @@ export function registerConversations(bot: Bot) {
         session.type = response.data.tipo;
         session.amount = response.data.monto;
         session.description = response.data.descripcion;
+        session.category = response.data.categoria;
+        session.categoryId = response.data.categoriaId;
         session.state = 'confirming';
       }
       
