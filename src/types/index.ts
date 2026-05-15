@@ -92,3 +92,16 @@ export const Tables = {
   CATEGORIES: "categories",
   TRANSACTIONS: "transactions",
 } as const;
+
+// =============================================================================
+// Bot Context (GrammY)
+// =============================================================================
+import type { Context } from 'grammy';
+
+export interface BotConfig {
+  user: Profile;
+}
+
+export type BotContext = Context & {
+  config?: BotConfig;
+};

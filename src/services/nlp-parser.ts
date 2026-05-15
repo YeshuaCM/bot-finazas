@@ -1,7 +1,6 @@
-import Groq from "groq-sdk";
-import { config } from "../config";
 import type { ParsedTransaction } from "../types";
-import { CATEGORIES_KEYWORDS, VALID_CATEGORIES, detectCategoryByKeyword } from "../data/categories";
+import { VALID_CATEGORIES, detectCategoryByKeyword } from "../data/categories";
+import { getGroqClient } from "./groq-client";
 
 // Keywords que indican que es un INGRESO
 const INCOME_KEYWORDS = [
@@ -31,19 +30,6 @@ Ejemplos:
 - "Gasté 20k en taxi" → {"tipo":"gasto","monto":20000,"categoria":"transporte","descripcion":"taxi"}
 
 Responde SOLO con JSON válido, sin texto adicional.`;
-
-// =============================================================================
-// CLIENTE GROQ
-// =============================================================================
-
-let groqClient: Groq;
-
-const getGroqClient = () => {
-  if (!groqClient) {
-    groqClient = new Groq({ apiKey: config.groq.apiKey });
-  }
-  return groqClient;
-};
 
 // =============================================================================
 // FUNCIONES AUXILIARES
@@ -107,6 +93,7 @@ export async function parseTransactionMessage(
   try {
     // Usar Groq para interpretar
     const client = getGroqClient();
+
     
     const fullPrompt = `${NLP_SYSTEM_PROMPT}\n\nMensaje del usuario: "${message}"`;
     

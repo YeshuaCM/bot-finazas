@@ -1,8 +1,9 @@
-import { Context, NextFunction } from 'grammy';
+import { NextFunction } from 'grammy';
+import type { BotContext } from '../types';
 import { userRepository } from '../data/repositories/user.repository';
 import { config } from '../config';
 
-export async function authMiddleware(ctx: Context, next: NextFunction) {
+export async function authMiddleware(ctx: BotContext, next: NextFunction): Promise<void> {
   if (!ctx.from) {
     return next();
   }
@@ -35,20 +36,19 @@ export async function authMiddleware(ctx: Context, next: NextFunction) {
     }
     
     // Guardar usuario en contexto
-    (ctx as any).config = (ctx as any).config || {};
-    (ctx as any).config.user = user;
-    
+    ctx.config = { user };
+
     await next();
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Auth middleware error:', error);
-    
+
+    const dbError = error as { code?: string };
     // Si el error es de clave duplicada, intentar obtener el usuario existente
-    if (error?.code === '23505') {
+    if (dbError?.code === '23505') {
       try {
         const existingUser = await userRepository.findByTelegramId(telegramId);
         if (existingUser) {
-          (ctx as any).config = (ctx as any).config || {};
-          (ctx as any).config.user = existingUser;
+          ctx.config = { user: existingUser };
           await next();
           return;
         }
@@ -56,7 +56,7 @@ export async function authMiddleware(ctx: Context, next: NextFunction) {
         console.error('Retry error:', retryError);
       }
     }
-    
+
     await ctx.reply('Hubo un error al procesar tu solicitud. Intenta de nuevo.');
   }
 }

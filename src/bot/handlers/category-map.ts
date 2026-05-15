@@ -1,0 +1,17 @@
+export const CATEGORY_MAP: Record<string, string> = {
+  'cat_comida': 'comida',
+  'cat_transporte': 'transporte',
+  'cat_mercado': 'mercado',
+  'cat_servicios': 'servicios',
+  'cat_salud': 'salud',
+  'cat_entretenimiento': 'entretenimiento',
+  'cat_educacion': 'educación',
+  'cat_diezmos': 'diezmos',
+  'cat_ofrendas': 'ofrendas',
+  'cat_otros': 'otros',
+  'cat_salario': 'salario',
+  'cat_freelance': 'freelance',
+  'cat_inversion': 'inversión',
+  'cat_regalo': 'regalo',
+  'cat_otro': 'otro',
+};

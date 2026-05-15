@@ -1,6 +1,8 @@
 import express, { Express, Request, Response, NextFunction } from "express";
 import cors from "cors";
+import rateLimit from "express-rate-limit";
 import { config } from "../config";
+import { apiKeyAuth } from "./middleware/auth";
 import transactionsRouter from "./routes/transactions";
 import balanceRouter from "./routes/balance";
 import reportsRouter from "./routes/reports";
@@ -8,11 +10,27 @@ import webhookRouter from "./routes/webhook";
 
 const app: Express = express();
 
+// Trust proxy (Fly.io, render, etc. — necesario para rate limiter detrás de proxy)
+app.set('trust proxy', 1);
+
 // Middleware
 app.use(cors());
 app.use(express.json());
 
-// Health check
+// Rate limiting for API routes
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: config.api.rateLimitMax,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Demasiadas solicitudes. Intenta de nuevo en un minuto." },
+});
+app.use("/api", apiLimiter);
+
+// API Key authentication (except health check)
+app.use("/api", apiKeyAuth);
+
+// Health check (public, no auth required)
 app.get("/health", (_req: Request, res: Response) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });

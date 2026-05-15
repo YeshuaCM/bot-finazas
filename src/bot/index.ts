@@ -1,5 +1,6 @@
 import { Bot, webhookCallback } from 'grammy';
 import { config } from '../config';
+import type { BotContext } from '../types';
 import { registerCommands } from './handlers/commands';
 import { registerConversations } from './handlers/conversations';
 import { authMiddleware } from './middleware';
@@ -19,7 +20,7 @@ bot.catch((err) => {
 });
 
 // Comando /start
-bot.command('start', async (ctx: any) => {
+bot.command('start', async (ctx: BotContext) => {
   const user = ctx.config?.user;
   
   if (user) {
@@ -49,7 +50,7 @@ bot.command('start', async (ctx: any) => {
 });
 
 // Iniciar bot
-const startBot = async () => {
+const startBot = async (): Promise<void> => {
   console.log('Starting bot...');
   
   // Configurar webhook en desarrollo

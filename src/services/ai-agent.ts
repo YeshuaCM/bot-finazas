@@ -1,7 +1,6 @@
-import Groq from "groq-sdk";
-import { config } from "../config";
 import { transactionRepository } from "../data/repositories/transaction.repository";
 import { getBogotaDateString } from "../utils/date.utils";
+import { getGroqClient } from "./groq-client";
 import { categorize } from "./categorizer";
 import { categoryRepository } from "../data/repositories/category.repository";
 
@@ -68,282 +67,194 @@ Tu lavoro es ANALIZAR el mensaje del usuario y devolver SOLO un intent de los si
 Responde SOLO con el intent, nada más.`;
 
 // =============================================================================
-// RESPONSE TEMPLATES
+// RESPONSE FORMATTING — single generic formatter with thin wrappers
 // =============================================================================
 
-interface TransactionWithTime {
+type TxType = "gasto" | "ingreso";
+
+interface TxInput {
   amount: number;
   description?: string;
-  created_at?: string;
+  type?: TxType;
   transaction_date?: string;
 }
 
-/**
- * Formatea una transacción individual (sin hora, solo monto y descripción)
- */
-function formatTransactionLine(
-  transaction: TransactionWithTime,
-  type: "gasto" | "ingreso"
-): string {
-  return `• $${transaction.amount.toLocaleString("es-CL")}${transaction.description ? ` - ${transaction.description}` : ""}`;
+interface FormatOptions {
+  title?: string;
+  showTotal?: boolean;
+  showBalance?: boolean;
+  groupByDay?: boolean;
+  maxDays?: number;
+  emptyMessage?: string;
+}
+
+const MONTH_NAMES = [
+  "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
+];
+
+const DAY_NAMES = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
+
+function localeAmount(n: number): string {
+  return `$${n.toLocaleString("es-CL")}`;
+}
+
+function formatTxLine(t: TxInput, withEmoji = false): string {
+  const prefix = withEmoji ? (t.type === "gasto" ? "💸 " : "💵 ") : "• ";
+  return `${prefix}${localeAmount(t.amount)}${t.description ? ` - ${t.description}` : ""}`;
 }
 
 /**
- * Formatea lista de transacciones con hora (para ingresos o gastos)
- */
-function formatTransactionList(
-  transactions: TransactionWithTime[],
-  type: "gasto" | "ingreso"
-): string {
-  if (transactions.length === 0) {
-    return type === "gasto" ? "No hay gastos registrados." : "No hay ingresos registrados.";
-  }
-
-  const lines = transactions.map((t) => formatTransactionLine(t, type));
-  return lines.join("\n");
-}
-
-/**
- * Formatea lista de transacciones (genérica para cualquier tipo)
- * Útil para resúmenes cuando se mezclan ingresos y gastos
+ * Generic transaction formatter. All specific formatters delegate here.
  */
 function formatTransactions(
-  transactions: Array<TransactionWithTime & { type: "gasto" | "ingreso" }>
+  transactions: TxInput[],
+  options: FormatOptions = {}
 ): string {
   if (transactions.length === 0) {
-    return "No hay transacciones registradas.";
+    return options.emptyMessage || "No hay transacciones registradas.";
   }
 
-  const lines = transactions.map((t) => {
-    const emoji = t.type === "gasto" ? "💸" : "💵";
-    return `${emoji} $${t.amount.toLocaleString("es-CL")}${t.description ? ` - ${t.description}` : ""}`;
-  });
+  let result = options.title ? `${options.title}\n\n` : "";
 
-  return lines.join("\n");
+  if (options.groupByDay) {
+    const byDay: Record<string, TxInput[]> = {};
+    for (const t of transactions) {
+      const day = t.transaction_date || "sin fecha";
+      if (!byDay[day]) byDay[day] = [];
+      byDay[day].push(t);
+    }
+
+    const sortedDays = Object.keys(byDay).sort();
+    const showReverse = options.maxDays !== undefined;
+    const daysToShow = showReverse ? sortedDays.reverse().slice(0, options.maxDays) : sortedDays;
+
+    for (const day of daysToShow) {
+      const dayTxs = byDay[day];
+      const dayDate = new Date(day);
+      const dayLabel = options.maxDays
+        ? `📅 ${dayDate.getDate()}`
+        : `📅 ${DAY_NAMES[dayDate.getDay()]} ${dayDate.getDate()}/${dayDate.getMonth() + 1}`;
+
+      result += `${dayLabel}\n─────────────────────\n`;
+
+      for (const t of dayTxs) {
+        result += `${formatTxLine(t, true)}\n`;
+      }
+
+      const dayGastos = dayTxs.filter(t => t.type === "gasto").reduce((s, t) => s + t.amount, 0);
+      const dayIngresos = dayTxs.filter(t => t.type === "ingreso").reduce((s, t) => s + t.amount, 0);
+      result += `\n💵: ${localeAmount(dayIngresos)}  💸: ${localeAmount(dayGastos)}\n\n`;
+    }
+
+    if (showReverse && Object.keys(byDay).length > options.maxDays!) {
+      result += `... y ${Object.keys(byDay).length - options.maxDays!} días más\n\n`;
+    }
+  } else {
+    for (const t of transactions) {
+      result += `${formatTxLine(t, false)}\n`;
+    }
+  }
+
+  if (options.showTotal) {
+    const total = transactions.reduce((s, t) => s + t.amount, 0);
+    result += `\n*Total:* ${localeAmount(total)}`;
+  }
+
+  if (options.showBalance) {
+    const gastos = transactions.filter(t => t.type === "gasto").reduce((s, t) => s + t.amount, 0);
+    const ingresos = transactions.filter(t => t.type === "ingreso").reduce((s, t) => s + t.amount, 0);
+    const balance = ingresos - gastos;
+    const emoji = balance >= 0 ? "📈" : "📉";
+
+    result += `\n─────────────────────\n`;
+    result += `💵 Total ingresos: ${localeAmount(ingresos)} (${transactions.filter(t => t.type === "ingreso").length} transacción${transactions.filter(t => t.type === "ingreso").length !== 1 ? "es" : ""})\n`;
+    result += `💸 Total gastos: ${localeAmount(gastos)} (${transactions.filter(t => t.type === "gasto").length} transacción${transactions.filter(t => t.type === "gasto").length !== 1 ? "es" : ""})\n`;
+    result += `${emoji} Balance: ${localeAmount(balance)}`;
+  }
+
+  return result;
 }
 
+/** Thin wrapper: just gastos list with total */
 function formatGastos(transactions: Array<{ amount: number; description?: string }>): string {
-  if (transactions.length === 0) {
-    return "No tienes gastos registrados hoy.";
-  }
-  
-  const total = transactions.reduce((sum, t) => sum + t.amount, 0);
-  const lines = transactions.map(t => 
-    `• $${t.amount.toLocaleString("es-CL")}${t.description ? ` - ${t.description}` : ""}`
-  );
-  
-  return `💸 *Gastos de hoy:*\n\n${lines.join("\n")}\n\n*Total:* $${total.toLocaleString("es-CL")}`;
+  if (transactions.length === 0) return "No tienes gastos registrados hoy.";
+  return formatTransactions(transactions, {
+    title: "💸 *Gastos de hoy:*",
+    showTotal: true,
+  });
 }
 
+/** Thin wrapper: balance summary */
 function formatBalance(data: { total_gastos: number; total_ingresos: number; balance: number }): string {
   const emoji = data.balance >= 0 ? "💰" : "⚠️";
   return `${emoji} *Balance:*\n\n`
-    + `Ingresos: $${data.total_ingresos.toLocaleString("es-CL")}\n`
-    + `Gastos: $${data.total_gastos.toLocaleString("es-CL")}\n`
-    + `*Disponible:* $${data.balance.toLocaleString("es-CL")}`;
+    + `Ingresos: ${localeAmount(data.total_ingresos)}\n`
+    + `Gastos: ${localeAmount(data.total_gastos)}\n`
+    + `*Disponible:* ${localeAmount(data.balance)}`;
 }
 
-/**
- * Formatea resumen diario con TODAS las transacciones (sin hora)
- */
+/** Thin wrapper: daily breakdown */
 function formatResumenDiario(
-  gastos: Array<{ amount: number; description?: string; created_at?: string }>,
-  ingresos: Array<{ amount: number; description?: string; created_at?: string }>
+  gastos: Array<{ amount: number; description?: string }>,
+  ingresos: Array<{ amount: number; description?: string }>
 ): string {
-  const totalGastos = gastos.reduce((sum, t) => sum + t.amount, 0);
-  const totalIngresos = ingresos.reduce((sum, t) => sum + t.amount, 0);
+  const today = new Date();
+  const title = `📊 Resumen de HOY - ${today.getDate()} ${MONTH_NAMES[today.getMonth()]} ${today.getFullYear()}`;
+  const gastosConTipo = gastos.map(g => ({ ...g, type: "gasto" as TxType }));
+  const ingresosConTipo = ingresos.map(i => ({ ...i, type: "ingreso" as TxType }));
+
+  let msg = `${title}\n\n`;
+  msg += `💵 INGRESOS:\n${formatTransactions(ingresosConTipo, { emptyMessage: "  No hay ingresos registrados" })}\n\n`;
+  msg += `💸 GASTOS:\n${formatTransactions(gastosConTipo, { emptyMessage: "  No hay gastos registrados" })}`;
+
+  const totalGastos = gastos.reduce((s, t) => s + t.amount, 0);
+  const totalIngresos = ingresos.reduce((s, t) => s + t.amount, 0);
   const balance = totalIngresos - totalGastos;
 
-  const today = new Date();
-  const day = today.getDate();
-  const monthNames = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
-  const month = monthNames[today.getMonth()];
-  const year = today.getFullYear();
+  msg += `\n\n─────────────────────\n`;
+  msg += `💵 Total ingresos: ${localeAmount(totalIngresos)}\n`;
+  msg += `💸 Total gastos: ${localeAmount(totalGastos)}\n`;
+  msg += `${balance >= 0 ? "📈" : "📉"} Balance: ${localeAmount(balance)}`;
 
-  let mensaje = `📊 Resumen de HOY - ${day} ${month} ${year}\n\n`;
-
-  // Sección de INGRESOS
-  mensaje += `💵 INGRESOS:\n`;
-  if (ingresos.length === 0) {
-    mensaje += `  No hay ingresos registrados\n`;
-  } else {
-    ingresos.forEach(i => {
-      mensaje += `  • $${i.amount.toLocaleString("es-CL")}${i.description ? ` - ${i.description}` : ""}\n`;
-    });
-  }
-
-  mensaje += `\n💸 GASTOS:\n`;
-  if (gastos.length === 0) {
-    mensaje += `  No hay gastos registrados\n`;
-  } else {
-    gastos.forEach(g => {
-      mensaje += `  • $${g.amount.toLocaleString("es-CL")}${g.description ? ` - ${g.description}` : ""}\n`;
-    });
-  }
-
-  mensaje += `\n─────────────────────\n`;
-  mensaje += `💵 Total ingresos: $${totalIngresos.toLocaleString("es-CL")}\n`;
-  mensaje += `💸 Total gastos: $${totalGastos.toLocaleString("es-CL")}\n`;
-
-  const emojiBalance = balance >= 0 ? "📈" : "📉";
-  mensaje += `${emojiBalance} Balance: $${balance.toLocaleString("es-CL")}`;
-
-  return mensaje;
+  return msg;
 }
 
-/**
- * Formatea resumen semanal con TODAS las transacciones agrupadas por día
- */
+/** Thin wrapper: weekly breakdown by day */
 function formatResumenSemanal(
-  gastos: Array<{ amount: number; description?: string; transaction_date?: string; created_at?: string }>,
-  ingresos: Array<{ amount: number; description?: string; transaction_date?: string; created_at?: string }>
+  gastos: Array<{ amount: number; description?: string; transaction_date?: string }>,
+  ingresos: Array<{ amount: number; description?: string; transaction_date?: string }>
 ): string {
-  const totalGastos = gastos.reduce((sum, t) => sum + t.amount, 0);
-  const totalIngresos = ingresos.reduce((sum, t) => sum + t.amount, 0);
-  const balance = totalIngresos - totalGastos;
-
-  let mensaje = `📊 *Resumen de la SEMANA*\n\n`;
-
-  // Combinar todas las transacciones para agrupar por día
-  const allTransactions = [
-    ...gastos.map((g) => ({ ...g, type: "gasto" as const })),
-    ...ingresos.map((i) => ({ ...i, type: "ingreso" as const })),
+  const all = [
+    ...gastos.map(g => ({ ...g, type: "gasto" as TxType })),
+    ...ingresos.map(i => ({ ...i, type: "ingreso" as TxType })),
   ];
-
-  if (allTransactions.length === 0) {
-    mensaje += `No hay transacciones esta semana.`;
-    return mensaje;
-  }
-
-  // Agrupar por día (transaction_date)
-  const byDay: Record<string, typeof allTransactions> = {};
-  for (const t of allTransactions) {
-    const day = t.transaction_date || "sin fecha";
-    if (!byDay[day]) byDay[day] = [];
-    byDay[day].push(t);
-  }
-
-  // Ordenar días cronológicamente
-  const sortedDays = Object.keys(byDay).sort();
-
-  // Formatear cada día
-  const dayNames = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
-
-  for (const day of sortedDays) {
-    const transactions = byDay[day];
-    const dayDate = new Date(day);
-    const dayName = dayNames[dayDate.getDay()];
-    const dayNum = dayDate.getDate();
-    const month = dayDate.getMonth() + 1;
-
-    const dayTotalGastos = transactions
-      .filter((t) => t.type === "gasto")
-      .reduce((sum, t) => sum + t.amount, 0);
-    const dayTotalIngresos = transactions
-      .filter((t) => t.type === "ingreso")
-      .reduce((sum, t) => sum + t.amount, 0);
-
-    mensaje += `📅 ${dayName} ${dayNum}/${month}\n`;
-    mensaje += `─────────────────────\n`;
-
-    for (const t of transactions) {
-      const emoji = t.type === "gasto" ? "💸" : "💵";
-      mensaje += `${emoji} $${t.amount.toLocaleString("es-CL")}${t.description ? ` - ${t.description}` : ""}\n`;
-    }
-
-    mensaje += `\n💵 Ingresos: $${dayTotalIngresos.toLocaleString("es-CL")}  💸 Gastos: $${dayTotalGastos.toLocaleString("es-CL")}\n\n`;
-  }
-
-  // Totales de la semana
-  mensaje += `─────────────────────\n`;
-  mensaje += `💵 Total semana ingresos: $${totalIngresos.toLocaleString("es-CL")} (${ingresos.length} transacción${ingresos.length !== 1 ? "es" : ""})\n`;
-  mensaje += `💸 Total semana gastos: $${totalGastos.toLocaleString("es-CL")} (${gastos.length} transacción${gastos.length !== 1 ? "es" : ""})\n`;
-
-  const emojiBalance = balance >= 0 ? "📈" : "📉";
-  mensaje += `${emojiBalance} Balance: $${balance.toLocaleString("es-CL")}`;
-
-  return mensaje;
+  return formatTransactions(all, {
+    title: "📊 *Resumen de la SEMANA*",
+    groupByDay: true,
+    showBalance: true,
+    emptyMessage: "No hay transacciones esta semana.",
+  });
 }
 
-/**
- * Formatea resumen mensual con TODAS las transacciones agrupadas por día
- */
+/** Thin wrapper: monthly breakdown by day */
 function formatResumenMensual(
-  gastos: Array<{ amount: number; description?: string; transaction_date?: string; created_at?: string }>,
-  ingresos: Array<{ amount: number; description?: string; transaction_date?: string; created_at?: string }>
+  gastos: Array<{ amount: number; description?: string; transaction_date?: string }>,
+  ingresos: Array<{ amount: number; description?: string; transaction_date?: string }>
 ): string {
-  const totalGastos = gastos.reduce((sum, t) => sum + t.amount, 0);
-  const totalIngresos = ingresos.reduce((sum, t) => sum + t.amount, 0);
-  const balance = totalIngresos - totalGastos;
-
   const today = new Date();
-  const monthNames = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
-  const monthName = monthNames[today.getMonth()];
-
-  let mensaje = `📊 *Resumen de ${monthName} ${today.getFullYear()}*\n\n`;
-
-  // Combinar todas las transacciones para agrupar por día
-  const allTransactions = [
-    ...gastos.map((g) => ({ ...g, type: "gasto" as const })),
-    ...ingresos.map((i) => ({ ...i, type: "ingreso" as const })),
+  const monthName = MONTH_NAMES[today.getMonth()];
+  const all = [
+    ...gastos.map(g => ({ ...g, type: "gasto" as TxType })),
+    ...ingresos.map(i => ({ ...i, type: "ingreso" as TxType })),
   ];
-
-  if (allTransactions.length === 0) {
-    mensaje += `No hay transacciones este mes.`;
-    return mensaje;
-  }
-
-  // Agrupar por día (transaction_date)
-  const byDay: Record<string, typeof allTransactions> = {};
-  for (const t of allTransactions) {
-    const day = t.transaction_date || "sin fecha";
-    if (!byDay[day]) byDay[day] = [];
-    byDay[day].push(t);
-  }
-
-  // Ordenar días cronológicamente
-  const sortedDays = Object.keys(byDay).sort().reverse(); // más recientes primero
-
-  // Mostrar máximo días configurados para no exceder límites de mensaje
-  const daysToShow = sortedDays.slice(0, MAX_DAYS_TO_SHOW);
-
-  // Formatear cada día
-  for (const day of daysToShow) {
-    const transactions = byDay[day];
-    const dayDate = new Date(day);
-    const dayNum = dayDate.getDate();
-
-    const dayTotalGastos = transactions
-      .filter((t) => t.type === "gasto")
-      .reduce((sum, t) => sum + t.amount, 0);
-    const dayTotalIngresos = transactions
-      .filter((t) => t.type === "ingreso")
-      .reduce((sum, t) => sum + t.amount, 0);
-
-    mensaje += `📅 ${dayNum}\n`;
-    mensaje += `─────────────────────\n`;
-
-    for (const t of transactions) {
-      const emoji = t.type === "gasto" ? "💸" : "💵";
-      mensaje += `${emoji} $${t.amount.toLocaleString("es-CL")}${t.description ? ` - ${t.description}` : ""}\n`;
-    }
-
-    mensaje += `\n💵: $${dayTotalIngresos.toLocaleString("es-CL")}  💸: $${dayTotalGastos.toLocaleString("es-CL")}\n\n`;
-  }
-
-  if (sortedDays.length > MAX_DAYS_TO_SHOW) {
-    mensaje += `... y ${sortedDays.length - MAX_DAYS_TO_SHOW} días más\n\n`;
-  }
-
-  // Totales del mes
-  mensaje += `─────────────────────\n`;
-  mensaje += `💵 Total mes ingresos: $${totalIngresos.toLocaleString("es-CL")} (${ingresos.length} transacción${ingresos.length !== 1 ? "es" : ""})\n`;
-  mensaje += `💸 Total mes gastos: $${totalGastos.toLocaleString("es-CL")} (${gastos.length} transacción${gastos.length !== 1 ? "es" : ""})\n`;
-
-  const emojiBalance = balance >= 0 ? "📈" : "📉";
-  mensaje += `${emojiBalance} Balance: $${balance.toLocaleString("es-CL")}`;
-
-  return mensaje;
+  return formatTransactions(all, {
+    title: `📊 *Resumen de ${monthName} ${today.getFullYear()}`,
+    groupByDay: true,
+    maxDays: MAX_DAYS_TO_SHOW,
+    showBalance: true,
+    emptyMessage: "No hay transacciones este mes.",
+  });
 }
 
 function getSaludo(): string {
@@ -373,15 +284,6 @@ También podés hablarme naturalmente:
 // =============================================================================
 // PARSE INTENT
 // =============================================================================
-
-let groqClient: Groq;
-
-const getGroqClient = () => {
-  if (!groqClient) {
-    groqClient = new Groq({ apiKey: config.groq.apiKey });
-  }
-  return groqClient;
-};
 
 async function detectIntent(message: string): Promise<Intent> {
   try {

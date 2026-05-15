@@ -1,6 +1,8 @@
 import { supabase } from '../supabase';
 import type { BalanceResponse } from '../../types';
 
+import { getBogotaDate, getBogotaDateString } from '../../utils/date.utils';
+
 export const balanceRepository = {
   // Obtener balance mensual
   async getMonthlyBalance(userId: number, month: number, year: number): Promise<BalanceResponse> {
@@ -30,8 +32,8 @@ export const balanceRepository = {
 
     // Breakdown por categoría
     const categoryMap = new Map<string, { total: number; cantidad: number }>();
-    gastos?.forEach((g: any) => {
-      const catName = g.categories?.name || 'otros';
+    gastos?.forEach((g: { amount: number; categories: { name: string }[] | null }) => {
+      const catName = g.categories?.[0]?.name || 'otros';
       const current = categoryMap.get(catName) || { total: 0, cantidad: 0 };
       categoryMap.set(catName, {
         total: current.total + Number(g.amount),
@@ -53,5 +55,65 @@ export const balanceRepository = {
       balance: totalIngresos - totalGastos,
       porCategoria,
     };
-  }
+  },
+
+  // Obtener balance del día (hoy en Bogotá)
+  async getDailyBalance(userId: number): Promise<{ ingresos: number; gastos: number; balance: number }> {
+    const dateStr = getBogotaDateString();
+
+    const { data: ingresos } = await supabase
+      .from('transactions')
+      .select('amount')
+      .eq('user_id', userId)
+      .eq('type', 'ingreso')
+      .eq('transaction_date', dateStr);
+
+    const { data: gastos } = await supabase
+      .from('transactions')
+      .select('amount')
+      .eq('user_id', userId)
+      .eq('type', 'gasto')
+      .eq('transaction_date', dateStr);
+
+    const totalIngresos = ingresos?.reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+    const totalGastos = gastos?.reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+
+    return { ingresos: totalIngresos, gastos: totalGastos, balance: totalIngresos - totalGastos };
+  },
+
+  // Obtener balance de la semana (lunes a domingo en Bogotá)
+  async getWeeklyBalance(userId: number): Promise<{ ingresos: number; gastos: number; balance: number }> {
+    const today = getBogotaDate();
+    const dayOfWeek = today.getDay(); // 0=Sun, 1=Mon...
+    const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+
+    const monday = new Date(today);
+    monday.setDate(today.getDate() + mondayOffset);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+
+    const startStr = monday.toISOString().split('T')[0];
+    const endStr = sunday.toISOString().split('T')[0];
+
+    const { data: ingresos } = await supabase
+      .from('transactions')
+      .select('amount')
+      .eq('user_id', userId)
+      .eq('type', 'ingreso')
+      .gte('transaction_date', startStr)
+      .lte('transaction_date', endStr);
+
+    const { data: gastos } = await supabase
+      .from('transactions')
+      .select('amount')
+      .eq('user_id', userId)
+      .eq('type', 'gasto')
+      .gte('transaction_date', startStr)
+      .lte('transaction_date', endStr);
+
+    const totalIngresos = ingresos?.reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+    const totalGastos = gastos?.reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+
+    return { ingresos: totalIngresos, gastos: totalGastos, balance: totalIngresos - totalGastos };
+  },
 };

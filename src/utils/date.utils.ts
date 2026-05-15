@@ -1,32 +1,57 @@
 // =============================================================================
 // Timezone utilities - Bogotá (Colombia) timezone
 // =============================================================================
+//
+// Colombia uses UTC-5 with no DST.
+// Uses Intl.DateTimeFormat for reliable timezone conversion regardless
+// of the server's system timezone.
+
+const BOGOTA_TIMEZONE = 'America/Bogota';
+
+function getDateParts(date: Date): { year: string; month: string; day: string } {
+  const formatter = new Intl.DateTimeFormat('es-CO', {
+    timeZone: BOGOTA_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const parts = formatter.formatToParts(date);
+  return {
+    year: parts.find(p => p.type === 'year')!.value,
+    month: parts.find(p => p.type === 'month')!.value,
+    day: parts.find(p => p.type === 'day')!.value,
+  };
+}
+
+function getTimeParts(date: Date): { hour: string; minute: string; second: string } {
+  const formatter = new Intl.DateTimeFormat('es-CO', {
+    timeZone: BOGOTA_TIMEZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(date);
+  return {
+    hour: parts.find(p => p.type === 'hour')!.value,
+    minute: parts.find(p => p.type === 'minute')!.value,
+    second: parts.find(p => p.type === 'second')!.value || '00',
+  };
+}
 
 /**
  * Get current date in Bogotá timezone (America/Bogota)
- * Colombia uses UTC-5 (no DST)
  */
 export function getBogotaDate(): Date {
-  // Get current UTC time
-  const now = new Date();
-  
-  // Colombia is UTC-5
-  const offsetMinutes = -5 * 60;
-  
-  // Create date with offset applied
-  const localTime = new Date(now.getTime() + (offsetMinutes - now.getTimezoneOffset()) * 60000);
-  
-  return localTime;
+  const { year, month, day } = getDateParts(new Date());
+  return new Date(`${year}-${month}-${day}T00:00:00`);
 }
 
 /**
  * Get date string in YYYY-MM-DD format for Bogotá timezone
  */
 export function getBogotaDateString(): string {
-  const date = getBogotaDate();
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
+  const { year, month, day } = getDateParts(new Date());
   return `${year}-${month}-${day}`;
 }
 
@@ -35,15 +60,15 @@ export function getBogotaDateString(): string {
  * Used for created_at timestamps
  */
 export function getBogotaISOString(): string {
-  return getBogotaDate().toISOString();
+  const { year, month, day } = getDateParts(new Date());
+  const { hour, minute, second } = getTimeParts(new Date());
+  return `${year}-${month}-${day}T${hour}:${minute}:${second}-05:00`;
 }
 
 /**
  * Get time string in HH:MM format for Bogotá timezone
  */
 export function getBogotaTimeString(): string {
-  const date = getBogotaDate();
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  return `${hours}:${minutes}`;
+  const { hour, minute } = getTimeParts(new Date());
+  return `${hour}:${minute}`;
 }

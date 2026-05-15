@@ -1,6 +1,7 @@
 import { balanceRepository } from '../data/repositories/balance.repository';
 import { transactionRepository } from '../data/repositories/transaction.repository';
-import type { BalanceResponse } from '../types';
+import { categoryRepository } from '../data/repositories/category.repository';
+import type { BalanceResponse, Transaction } from '../types';
 
 export interface MonthlyReport {
   mes: number;
@@ -122,8 +123,9 @@ export async function getCategoryReport(
   userId: number,
   categoryName: string,
   month?: number,
-  year?: number
-): Promise<{ total: number; cantidad: number; transactions: any[] }> {
+  year?: number,
+  type?: 'gasto' | 'ingreso'
+): Promise<{ total: number; cantidad: number; transactions: Transaction[] }> {
   const now = new Date();
   const targetMonth = month || now.getMonth() + 1;
   const targetYear = year || now.getFullYear();
@@ -131,20 +133,30 @@ export async function getCategoryReport(
   const startDate = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`;
   const endDate = new Date(targetYear, targetMonth, 0).toISOString().split('T')[0];
   
+  // Buscar categoría por nombre para obtener su ID (probar el type dado o ambos)
+  const typesToTry: ('gasto' | 'ingreso')[] = type ? [type] : ['gasto', 'ingreso'];
+  let category = null;
+  for (const t of typesToTry) {
+    category = await categoryRepository.findByName(categoryName, t);
+    if (category) break;
+  }
+  
+  if (!category) {
+    return { total: 0, cantidad: 0, transactions: [] };
+  }
+  
+  // Filtrar por category_id (correcto, no por descripción como antes)
   const transactions = await transactionRepository.findByUserId(userId, {
+    category_id: category.id,
     dateFrom: startDate,
     dateTo: endDate,
   });
   
-  const filtered = transactions.filter(t => 
-    t.description?.toLowerCase().includes(categoryName.toLowerCase())
-  );
-  
-  const total = filtered.reduce((sum, t) => sum + Number(t.amount), 0);
+  const total = transactions.reduce((sum, t) => sum + Number(t.amount), 0);
   
   return {
     total,
-    cantidad: filtered.length,
-    transactions: filtered,
+    cantidad: transactions.length,
+    transactions,
   };
 }
